@@ -1,0 +1,203 @@
+---
+name: code-standards
+description: Go code standards, validation/testing procedures, and dense library references for claude-workspace-manager (cwm). Load before writing, reviewing, or modifying ANY Go code in this repo, before adding a dependency, and before running lint/test/release. Covers the strict golangci-lint ruleset, project layout rules, testing patterns, and per-library references in references/.
+---
+
+# cwm code standards
+
+Authoritative rules for writing Go in this repo. This file is normative; `references/` holds
+per-library detail. All content optimized for LLM consumption — density over readability.
+
+## 0. Fast facts
+
+| | |
+|---|---|
+| Module | `github.com/pdylanross/claude-workspace-manager` |
+| Binary | `cwm` |
+| Go | 1.25 |
+| Task runner | `just` (read `justfile`; never hand-roll equivalents) |
+| Linter | `golangci-lint` v2, maratori golden config, `.golangci.yml` |
+| Release | `goreleaser` on `v*` tag |
+| CLI framework | cobra → `references/cobra.md` |
+
+## 1. Validation procedure
+
+Run in this order. **Every step must pass before work is reported complete.** Do not report
+"done" on a subset.
+
+```sh
+go build ./...            # 1. compiles
+go test ./... -race       # 2. tests + race detector    (just test)
+just lint                 # 3. MUST be 0 issues         (golangci-lint run --fix)
+```
+
+Config-level validation, when the corresponding file was touched:
+
+```sh
+golangci-lint config verify   # after editing .golangci.yml
+goreleaser check              # after editing .goreleaser.yml
+```
+
+Behavioural validation, when CLI surface changed:
+
+```sh
+just run <cmd>                # exercise the real command
+just snapshot                 # full release build, all 4 targets, into dist/
+./dist/cwm_linux_amd64_v1/cwm version   # PROVES ldflags reached main.*
+```
+
+Rules:
+- `just lint` returning anything other than `0 issues.` is a failure, not a warning.
+- Never add `//nolint` to make lint pass without an explicit reason string. `nolintlint` requires
+  both a specific linter name and an explanation: `//nolint:gosec // reason here`.
+- Never weaken `.golangci.yml` to make code pass. Fix the code. Changing the linter config is a
+  deliberate, called-out decision, not a workaround.
+- `just snapshot` is the ONLY check that catches a broken ldflag path in `.goreleaser.yml`; that
+  failure is silent until a real release. Run it whenever `main.go` vars or `.goreleaser.yml` change.
+
+## 2. Layout rules
+
+| Path | Rule |
+|---|---|
+| `cmd/cwm/` | Entrypoint ONLY. Declares `version`/`commit`/`date` ldflag targets, builds `version.Info`, calls `cli.Execute`. Names must match `-X main.*` in `.goreleaser.yml`. Nothing else goes here. |
+| `internal/` | cwm-only library code. **Default home for new subsystems.** |
+| `pkg/` | Only code an outside consumer could import. Put something here only if willing to keep its API stable. |
+
+- `internal/cli/` owns the cobra tree. Commands are `newXxxCmd(deps) *cobra.Command` constructors,
+  registered in `newRootCmd`. No package-level command vars.
+- Dependencies flow down as parameters. `cmd/cwm` → `internal/cli` → `internal/*`. Never upward.
+
+## 3. Go standards
+
+### 3.1 Hard constraints from the linter
+
+These are the rules that actually bite. Write to them the first time.
+
+| Rule | Linter | Detail |
+|---|---|---|
+| No package-level `var` outside `cmd/` | `gochecknoglobals` | Construct values, pass them down. `version.Info` is a parameter, not a global. Excluded only under `^cmd/` (ldflag targets need it). |
+| No `init()` outside `cmd/` | `gochecknoinits` | Wire things explicitly in constructors. |
+| Tests live in `package foo_test` | `testpackage` | Skip-regexp allows `export_test.go` and `internal_test.go` in `package foo`. |
+| Comments end in a period | `godot` | Every doc comment. Exception: lines containing `TODO`. |
+| Stdlib doc refs are bracketed | `godoclint` | `[os.Args]`, `[io.Writer]` — not bare `os.Args`. Also `no-unused-link`. |
+| No named returns | `nonamedreturns` | |
+| No magic numbers | `mnd` | Named constants. Some funcs exempted (see config `ignored-functions`). |
+| Max line length 120 | `golines` (formatter) | Auto-fixed by `just fmt`/`--fix`. |
+| Errors wrapped for `errors.Is/As` | `errorlint` | `fmt.Errorf("...: %w", err)`. |
+| Sentinel errors named `ErrX`, types `XError` | `errname` | |
+| Type assertions checked | `errcheck` (`check-type-assertions`) | `v, ok := x.(T)`, never bare `x.(T)`. |
+| `switch`/`map` over enums exhaustive | `exhaustive` | |
+| Exported methods before unexported | `funcorder` | Constructors first, then exported, then unexported. |
+| `math/rand/v2`, not `math/rand` | `depguard` | Also: `log/slog` not `log` (outside `main.go`); `google.golang.org/protobuf` not `github.com/golang/protobuf`; `github.com/google/uuid` not satori. |
+| No `sync.Mutex` as an embedded field | `embeddedstructfieldcheck` | Name the field. |
+| No `context.Context` in structs | (convention) | Pass as first arg. |
+| `slog` calls take a context in scope | `sloglint` | `no-global: all`, `context: scope`. No global loggers. |
+| Errors from other packages must be wrapped | `wrapcheck` | `fmt.Errorf("doing x: %w", err)` at every boundary. Excluded in `_test.go`. |
+| Struct literals must set every field | `exhaustruct_v5` | Applies to **our own** structs. Third-party structs with many optional fields (`cobra.Command`, `http.*`, `url.URL`, `exec.Cmd`, `tls.Config`) are filtered by a `text:` exclusion rule; extend that regex rather than adding per-literal directives. Excluded in `_test.go`. |
+| Struct tags aligned | `tagalign` | Auto-fixed by `--fix`. |
+| Declaration order/count | `decorder` | |
+| Interface method params named | `inamedparam` | `skip-single-param: true`. |
+| Interfaces stay small | `interfacebloat` | |
+| Preallocate slices with known length | `prealloc` | |
+| Stricter formatting than gofmt | `gofumpt` (formatter) | Auto-fixed by `just fmt`. |
+
+Complexity ceilings: `funlen` 100 lines / 50 statements, `gocyclo`/`cyclop` 30, `gocognit` 20,
+package-average cyclop 10. Exceeding one means the function should be split, not annotated.
+
+`_test.go` files are exempt from: `bodyclose`, `dupl`, `errcheck`, `exhaustruct_v5`, `funlen`,
+`goconst`, `gocognit`, `gosec`, `noctx`, `unparam`, `wrapcheck`. They are **not** exempt from
+`gochecknoglobals`.
+
+**`exhaustruct_v5` note.** v5 dropped v3's `include`/`exclude` type filters — its only settings are
+`allow-empty-returns`, `allow-empty-declarations`, `allow-empty` (verified by probing the config
+schema). Third-party struct noise is therefore filtered by a `text:` rule under
+`linters.exclusions.rules`, not by linter settings. When a new dependency's structs start generating
+noise, extend that regex. The per-literal `//exhaustruct:ignore` directive also works if a one-off
+escape is needed. Plain `exhaustruct` (v3) is deprecated since golangci-lint v2.13.0 — do not
+re-enable it.
+
+### 3.2 Conventions
+
+- **Errors**: wrap with context at each boundary (`fmt.Errorf("read workspace %s: %w", path, err)`).
+  Lowercase, no trailing punctuation. Sentinel errors as `var ErrNotFound = errors.New(...)` at
+  package level are fine — `gochecknoglobals` whitelists `Err`-prefixed error vars (verified against
+  this config). `reassign` then forbids reassigning them, which is the desired behaviour.
+- **Output**: commands write to `cmd.OutOrStdout()` / `cmd.ErrOrStderr()`, never `fmt.Println` or
+  `os.Stdout` directly. This is what makes commands testable.
+- **Context**: accept `context.Context` as the first parameter on anything doing I/O. Inside a cobra
+  command use `cmd.Context()`.
+- **Interfaces**: define at the consumer, accept interfaces, return concrete types. Keep them small.
+- **Doc comments**: every exported symbol. Start with the symbol name, end with a period.
+
+### 3.3 Testing
+
+- Table-driven, subtests via `t.Run`.
+- `t.Parallel()` on both the parent test and inside each subtest closure.
+- `package foo_test`. To reach unexported identifiers, add `export_test.go` in `package foo`
+  exporting a **function** wrapper — a `var` alias trips `gochecknoglobals`, which is not excluded
+  for test files:
+  ```go
+  // export_test.go, package foo
+  func NewRootCmd(info version.Info) *cobra.Command { return newRootCmd(info) }
+  ```
+- Cobra commands are tested by building the tree, `SetOut`/`SetErr` to a `bytes.Buffer`, `SetArgs`,
+  then `Execute()`. See `internal/cli/root_test.go`.
+- Assert on behaviour and output, not on internal call order. Prefer stdlib `testing`; no assertion
+  library is a dependency yet (`testifylint` is configured should `testify` ever be added).
+- Test error paths, not just happy paths. `-race` is mandatory.
+
+## 4. Library references
+
+`references/` holds dense, version-pinned notes for each non-trivial dependency. **Read the relevant
+reference before writing code against that library** — they exist because the LLM-visible API surface
+is larger than what is recallable accurately.
+
+| Library | Version | File | Scope |
+|---|---|---|---|
+| `github.com/spf13/cobra` | v1.10.2 | `references/cobra.md` | CLI framework: commands, flags, args validation, lifecycle hooks, completions, testing |
+
+Not yet referenced (add on first non-trivial use): git operations, GitHub API, config loading,
+structured logging, TUI.
+
+## 5. Adding a new reference
+
+**Trigger: add a reference whenever a non-trivial library is added to `go.mod`.** Non-trivial means
+anything with its own concepts, lifecycle, or API surface wider than a handful of functions — a CLI
+framework, a git library, an HTTP/API client, a config loader, a TUI toolkit, an ORM. Skip it for
+single-purpose utilities whose entire API is one or two obvious calls.
+
+Do this in the same change that adds the dependency, not later.
+
+### Procedure
+
+1. **Source the docs from the module cache, not the web.** The cache is version-exact and complete:
+   ```sh
+   C=$(go env GOMODCACHE)/<module>@<version>
+   find "$C" -iname '*.md' -not -path '*/vendor/*'   # README, site/, docs/
+   ```
+   Many projects ship their full documentation site under `site/content/` or `docs/`. Read all of it.
+2. **Get the authoritative API surface** — docs drift, signatures do not:
+   ```sh
+   go doc -all <module> | head -400
+   go doc -all <module> | grep -E '^func |^type '
+   ```
+3. **Fall back to WebFetch** only when the module ships no markdown (`pkg.go.dev/<module>`, or the
+   upstream repo docs). Note in the file that it was web-sourced.
+4. **Write `references/<library>.md`.** Rules:
+   - **This is for an LLM, not a human. Human readability does not matter.** No prose warm-up, no
+     narrative, no motivational framing, no "as you can see". Tables, signatures, terse bullets.
+   - Pin the version in a header line. Note how it was sourced.
+   - Lead with the decision-relevant material: the shapes you actually construct, the exact
+     signatures, the semantics that are non-obvious.
+   - Include a **Gotchas** section — behaviour that is surprising, silently wrong, or a common
+     mistake. This is the highest-value part of the file.
+   - Include a **Project conventions** section — how *this* repo uses the library, and which of the
+     library's idioms are forbidden here (usually the global-var/`init()` patterns most Go library
+     docs demonstrate, which `gochecknoglobals`/`gochecknoinits` reject).
+   - Include a **Testing** section if the library has a testing story.
+   - Omit anything the project will never use, but say explicitly that it was omitted, so a later
+     reader knows it exists.
+   - Prefer a compact signature table over paragraphs of description.
+5. **Register it** in the §4 table above, with version and scope.
+6. **Update on upgrade.** When a dependency's version changes in `go.mod`, re-check its reference: at
+   minimum re-run step 2 and diff the API surface. Update the pinned version line either way.
