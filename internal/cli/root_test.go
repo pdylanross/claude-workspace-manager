@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/pdylanross/claude-workspace-manager/internal/cli"
+	"github.com/pdylanross/claude-workspace-manager/internal/paths"
 	"github.com/pdylanross/claude-workspace-manager/pkg/version"
 )
 
@@ -46,7 +47,7 @@ func TestVersionCommand(t *testing.T) {
 
 			var out bytes.Buffer
 
-			cmd := cli.NewRootCmd(info)
+			cmd := cli.NewRootCmd(info, paths.New(paths.NewOSEnvironment()))
 			cmd.SetOut(&out)
 			cmd.SetErr(&out)
 			cmd.SetArgs(tt.args)
@@ -79,7 +80,7 @@ func TestVersionCommandRejectsArgs(t *testing.T) {
 
 	var out bytes.Buffer
 
-	cmd := cli.NewRootCmd(version.Info{})
+	cmd := cli.NewRootCmd(version.Info{}, paths.New(paths.NewOSEnvironment()))
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	cmd.SetArgs([]string{"version", "unexpected"})

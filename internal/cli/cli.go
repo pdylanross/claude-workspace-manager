@@ -7,6 +7,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/pdylanross/claude-workspace-manager/internal/paths"
 	"github.com/pdylanross/claude-workspace-manager/pkg/version"
 )
 
@@ -15,7 +16,9 @@ import (
 // Errors are returned rather than printed twice: cobra has already written the
 // message to stderr by the time this returns.
 func Execute(info version.Info) error {
-	if err := newRootCmd(info).Execute(); err != nil {
+	resolver := paths.New(paths.NewOSEnvironment())
+
+	if err := newRootCmd(info, resolver).Execute(); err != nil {
 		return fmt.Errorf("execute cwm: %w", err)
 	}
 

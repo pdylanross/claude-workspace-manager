@@ -3,11 +3,12 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/pdylanross/claude-workspace-manager/internal/paths"
 	"github.com/pdylanross/claude-workspace-manager/pkg/version"
 )
 
 // newRootCmd assembles the cwm root command and all of its subcommands.
-func newRootCmd(info version.Info) *cobra.Command {
+func newRootCmd(info version.Info, resolver *paths.Resolver) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cwm",
 		Short: "Manage Claude workspaces",
@@ -20,7 +21,7 @@ func newRootCmd(info version.Info) *cobra.Command {
 		SilenceUsage: true,
 	}
 
-	cmd.AddCommand(newVersionCmd(info))
+	cmd.AddCommand(newVersionCmd(info), newConfigCmd(resolver))
 
 	return cmd
 }

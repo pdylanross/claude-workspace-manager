@@ -146,6 +146,67 @@ re-enable it.
   library is a dependency yet (`testifylint` is configured should `testify` ever be added).
 - Test error paths, not just happy paths. `-race` is mandatory.
 
+### 3.4 Config structs
+
+`pkg/config.Config` and every struct nested in it are addressed by dotted path from the CLI
+(`cwm config set github.repoPrefix=x`, `cwm config show github`). That addressing is what
+constrains their shape.
+
+**Never put a slice, array, or map in a config struct.** There is no stable key for
+`things[2]` or `things["k"]`: `config set` could not name it, `config show` could not print a
+single element of it, and any ordering the user relied on would be an accident of how the file
+was last written. This is not a style preference — it breaks the CLI surface.
+
+| Allowed at a leaf | Never |
+|---|---|
+| `string`, `bool`, `int`/`int64`, `uint`/`uint64`, `float64` | slice, array, map |
+| a named struct, to group settings one level deeper | pointer, interface, channel, func, `any` |
+| | an embedded struct (see below) |
+
+Rules:
+
+- **Every field needs a `json` tag.** The tag, not the Go field name, is the on-disk name and
+  the name a user types. It is the compatibility promise; renaming one is a breaking change.
+  `musttag` enforces the tag's presence, not its stability.
+- **Group with nested structs**, not with prefixes in field names: `Github struct { Enabled
+  bool }` gives `github.enabled` for free.
+- **Never embed a struct.** `encoding/json` promotes an embedded struct's fields to the level
+  above, while a path addresses them one level down — the file and the CLI would disagree
+  about what the setting is called. Give the field a name.
+- **A config struct must stay copyable by assignment.** `cfg2 := cfg` is relied on as a deep
+  copy so a failed `config set` writes nothing. Banning reference types is what makes that true.
+- **Want a list?** Model it as a nested struct with named fields, or keep it out of the config
+  document entirely — its own file under the config root, addressed by its own commands.
+- `pkg/config.CheckShape` walks the type and rejects anything unsupported;
+  `TestConfigShapeIsAddressable` runs it. A field of a banned kind fails the test suite rather
+  than failing at runtime in front of a user.
+
+#### The `cwm` struct tag
+
+Alongside `json`, fields carry cwm's own metadata in a `cwm:"..."` tag (comma-separated):
+
+| Option | Meaning |
+|---|---|
+| `path` | A string holding a filesystem path. `Config.Normalize` expands a leading `~` and cleans it; `Config.Validate` requires it to be absolute. **Every path setting must have it** — a shell may not expand the tilde (bash does after `=`, zsh does not), so cwm cannot assume it received an expanded path. |
+| `internal` | A field cwm maintains for itself. Written to the document, excluded from `Settings()`, and rejected by `Get`/`Set` with `ErrNotASetting`. |
+
+Path handling is tag-driven rather than hand-written per field, because forgetting to expand a
+new path setting is a user-visible bug. Default-filling (`withDefaults`) is the opposite: it is
+written out per setting, because "blank means unset" is a per-setting judgement — a false bool
+is a choice, and an empty string may be a deliberate "no prefix".
+
+#### Schema version
+
+`config.SchemaVersion` describes the **document format** and is unrelated to the cwm binary's
+version. It moves rarely.
+
+- **Adding a setting does not bump it.** An older document lacks the field and gets the default;
+  that is the normal, expected path and needs no migration.
+- **Bump only for a change an older cwm would read _wrongly_ rather than not at all**: a renamed
+  or repurposed setting, or a value whose meaning changes.
+- A document from a *newer* schema is refused on load (`ErrUnsupportedSchema`), and the error
+  says to upgrade cwm — never to reset, which would throw away settings to fix the wrong problem.
+
 ## 4. Library references
 
 `references/` holds dense, version-pinned notes for each non-trivial dependency. **Read the relevant
@@ -201,3 +262,63 @@ Do this in the same change that adds the dependency, not later.
 5. **Register it** in the §4 table above, with version and scope.
 6. **Update on upgrade.** When a dependency's version changes in `go.mod`, re-check its reference: at
    minimum re-run step 2 and diff the API surface. Update the pinned version line either way.
+
+## 6. Pull requests
+
+Derived from PR #1 (`feat: scaffold cwm project structure and version command`) and PR #2
+(`feat: add the config subsystem and cwm config commands`). Read the most recent merged PR before
+writing a new one; this section is the pattern, not a replacement for looking.
+
+### Mechanics
+
+```sh
+gh pr create --base main --head <branch> --title "<title>" --body-file <path>
+```
+
+- **Always `--body-file`**, never an inline `--body`. Bodies contain backticks, quotes and `$`;
+  passing one through the shell mangles it. Write the file to the scratchpad, not the repo.
+- Branch names are `<type>/<topic>`: `feat/config-paths`.
+- Title is the same conventional-commit form as a commit subject — `feat: `, `fix: `, `refactor: `,
+  lowercase after the prefix, no trailing period. It names the whole branch's theme, not the last
+  commit's.
+
+### Body shape
+
+The skeleton, in order:
+
+1. **One opening paragraph** saying what the change is, and — this is the load-bearing half — what
+   it deliberately is *not*. PR #1: "This commit is structure only -- no workspace logic yet."
+   PR #2: "No workspace logic yet -- this is the layer everything else will read its settings from."
+2. **A `Layout:` block** whenever directories are added, two-space indented, `path/` then what lives
+   there. Same for a `Tooling:` block listing what was wired up, or a plain block of command lines
+   for a new CLI surface.
+3. **Prose explaining the decisions**, one topic per paragraph. Not a changelog, not a bullet list
+   of files touched — the diff already says what changed. Say why the non-obvious call was made and
+   what the alternative would have cost.
+4. **The one gotcha, in depth.** Every PR so far has one thing that looks wrong until explained:
+   PR #1 why `exhaustruct_v5` is filtered by a `text:` rule; PR #2 why embedded structs are banned.
+   Give it a full paragraph. A reviewer who has to reverse-engineer it will ask in a comment
+   instead, which is slower for everyone.
+5. **A `Verified` section** listing what was actually run — the §1 procedure plus anything
+   behavioural, with real numbers. Never claim a check that was not run.
+6. **A "Note for reviewers" line** for known gaps: what is untested, illustrative, or deferred, and
+   why. Volunteering the weak spot is cheaper than having it found.
+7. **The harness-provided attribution footer last**, when Claude Code authored the PR.
+
+### Formatting
+
+- **ASCII `--` for em dashes**, not `—`. Both existing PRs do this.
+- **Inline code sparingly.** PR #1 uses backticks on two lines total. Reserve them for identifiers
+  and commands where the monospace actually disambiguates; prose about a package does not need
+  them on every mention.
+- **No markdown headings in a single-subsystem PR** — PR #1 has none, and prose blocks carry it.
+  Add `###` headings only when the PR spans several packages and the reader needs to navigate;
+  PR #2 earns them at six commits across three packages. Pick one and hold it for the whole body.
+- No emoji beyond the attribution footer. No collapsed `<details>` blocks. No screenshots for a CLI
+  — paste the actual terminal output instead.
+
+### Commit messages inside the PR
+
+The PR body is written *from* the commit bodies, condensed — so write each commit message as if it
+were going to be read by a reviewer, because it is. Same rules: subject in conventional-commit
+form, body in prose explaining why, `--` for em dashes, and the harness attribution trailers last.
