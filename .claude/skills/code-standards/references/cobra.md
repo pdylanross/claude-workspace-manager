@@ -276,6 +276,20 @@ global state; **avoid**, wire explicitly instead.
 13. **`MarkFlagsMutuallyExclusive` and friends panic** on unknown flag names; the `MarkFlag*`
     singular forms return `error`.
 14. **`cobra.CheckErr` calls `os.Exit(1)`** — unusable in tests. Never use it.
+15. **Setting `Args` on a non-runnable root command is dead code that breaks "unknown command".**
+    Verified against v1.10.2 source:
+    - `command.go:775` — `Find` calls `legacyArgs` (which produces `unknown command "x" for "cwm"`)
+      **only when `c.Args == nil`**. Setting `Args` at all disables that detection.
+    - `command.go:955` — `execute()` returns `flag.ErrHelp` for `!c.Runnable()` *before* it reaches
+      `ValidateArgs` at line 968. So on a root with no `Run`/`RunE`, `Args` never runs.
+
+    Net effect of adding `Args: cobra.NoArgs` to a subcommand-only root: `cwm bogus` stops erroring
+    and silently prints help with **exit 0**. Leave `Args` nil on non-runnable parent commands; set
+    it only on commands that actually have a `Run`/`RunE`.
+16. **Everything after `--` is invisible to command resolution.** `stripFlags` (`command.go:688`)
+    breaks its loop at `--`, so those args never reach `legacyArgs`. `cwm -- bogus` prints root help
+    and exits 0. This is cobra's design and is not worth fighting — but never document a
+    `--`-separated invocation in tooling, because it silently swallows the real arguments.
 
 ## Project conventions
 

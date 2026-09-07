@@ -16,7 +16,8 @@ build:
     echo "Building..."
     go build -v ./...
 
-# Run the cwm CLI — usage: just run version  /  just run -- version --short
+# Run the cwm CLI — usage: just run version  /  just run version --short
+# (no `--` separator: just would pass it through and cobra would swallow the rest)
 run *args:
     go run ./cmd/cwm {{args}}
 
