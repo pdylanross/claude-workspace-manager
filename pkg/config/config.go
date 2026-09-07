@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 )
 
@@ -34,6 +35,48 @@ const WorkspaceDirName = "claude-workspaces"
 // hand-inspected document is expected to have.
 const jsonIndent = "  "
 
+// Update groups the settings controlling how cwm keeps itself up to date.
+type Update struct {
+	// Mode says what cwm does when it finds a newer release.
+	Mode Mode `json:"mode"`
+	// Channel says which releases cwm will consider.
+	Channel Channel `json:"channel"`
+}
+
+// Mode says what cwm does when a run finds a newer release.
+type Mode string
+
+// The modes cwm supports.
+const (
+	// ModeAuto installs the newer release there and then. The default: an
+	// out-of-date cwm is a worse outcome than a surprise upgrade.
+	ModeAuto Mode = "auto"
+	// ModeCheck says a newer release exists and leaves installing it to
+	// "cwm update".
+	ModeCheck Mode = "check"
+)
+
+// Values lists the modes a user may set, implementing [Enum].
+func (Mode) Values() []string {
+	return []string{string(ModeAuto), string(ModeCheck)}
+}
+
+// Channel says which releases cwm will consider when it looks for a newer one.
+type Channel string
+
+// The channels cwm supports.
+const (
+	// ChannelStable considers only full releases. The default.
+	ChannelStable Channel = "stable"
+	// ChannelPrerelease also considers prerelease tags such as v1.2.0-pre.1.
+	ChannelPrerelease Channel = "prerelease"
+)
+
+// Values lists the channels a user may set, implementing [Enum].
+func (Channel) Values() []string {
+	return []string{string(ChannelStable), string(ChannelPrerelease)}
+}
+
 // Config is the cwm configuration document.
 //
 // Every field needs a json tag, because the tag — not the Go field name — is
@@ -48,6 +91,8 @@ type Config struct {
 	// WorkspaceRoot is the directory cwm keeps workspaces in. Each workspace is
 	// a directory beneath it.
 	WorkspaceRoot string `cwm:"path" json:"workspaceRoot"`
+	// Update controls how cwm keeps itself up to date.
+	Update Update `json:"update"`
 }
 
 // Default returns the configuration cwm uses when no document exists yet, with
@@ -64,6 +109,10 @@ func Default(homeDir string) Config {
 	return Config{
 		SchemaVersion: SchemaVersion,
 		WorkspaceRoot: filepath.Join(homeDir, WorkspaceDirName),
+		Update: Update{
+			Mode:    ModeAuto,
+			Channel: ChannelStable,
+		},
 	}
 }
 
@@ -91,8 +140,10 @@ func (c Config) Normalize(homeDir string) Config {
 	normalized := c.withDefaults(Default(homeDir))
 
 	// The error is the walk's, and this walk cannot fail.
-	_ = eachPathSetting(&normalized, func(_ string, setting *string) error {
-		*setting = expandHome(*setting, homeDir)
+	_ = eachSetting(&normalized, func(_ string, field reflect.Value, declared reflect.StructField) error {
+		if hasOption(declared, optionPath) && field.Kind() == reflect.String {
+			field.SetString(expandHome(field.String(), homeDir))
+		}
 
 		return nil
 	})
@@ -111,16 +162,16 @@ func (c Config) Validate() error {
 		return err
 	}
 
-	return eachPathSetting(&c, func(name string, setting *string) error {
-		if strings.TrimSpace(*setting) == "" {
-			return fmt.Errorf("%w: %s is empty", ErrInvalidSetting, name)
+	return eachSetting(&c, func(name string, field reflect.Value, declared reflect.StructField) error {
+		if allowed, ok := enumValues(field); ok {
+			return validateEnum(name, field.String(), allowed)
 		}
 
-		if !filepath.IsAbs(*setting) {
-			return fmt.Errorf("%w: %s must be an absolute path, but is %q", ErrInvalidSetting, name, *setting)
+		if !hasOption(declared, optionPath) {
+			return nil
 		}
 
-		return nil
+		return validatePath(name, field.String())
 	})
 }
 
@@ -153,6 +204,14 @@ func (c Config) withDefaults(defaults Config) Config {
 
 	if strings.TrimSpace(c.WorkspaceRoot) == "" {
 		c.WorkspaceRoot = defaults.WorkspaceRoot
+	}
+
+	if strings.TrimSpace(string(c.Update.Mode)) == "" {
+		c.Update.Mode = defaults.Update.Mode
+	}
+
+	if strings.TrimSpace(string(c.Update.Channel)) == "" {
+		c.Update.Channel = defaults.Update.Channel
 	}
 
 	return c

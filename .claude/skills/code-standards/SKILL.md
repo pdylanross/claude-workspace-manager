@@ -190,6 +190,12 @@ Alongside `json`, fields carry cwm's own metadata in a `cwm:"..."` tag (comma-se
 | `path` | A string holding a filesystem path. `Config.Normalize` expands a leading `~` and cleans it; `Config.Validate` requires it to be absolute. **Every path setting must have it** — a shell may not expand the tilde (bash does after `=`, zsh does not), so cwm cannot assume it received an expanded path. |
 | `internal` | A field cwm maintains for itself. Written to the document, excluded from `Settings()`, and rejected by `Get`/`Set` with `ErrNotASetting`. |
 
+**Enum settings** are a named string type implementing `config.Enum` (`Values() []string`), not a
+bare `string` with a comment. `Config.Set` rejects a value outside the set before it lands and
+lists the alternatives in the error; `Config.Validate` catches the same thing in a hand-edited
+document. Declare the constants in the order a user should see them, default first — `Values()`
+output is what the error message prints. See `config.Mode` and `config.Channel`.
+
 Path handling is tag-driven rather than hand-written per field, because forgetting to expand a
 new path setting is a user-visible bug. Default-filling (`withDefaults`) is the opposite: it is
 written out per setting, because "blank means unset" is a per-setting judgement — a false bool

@@ -3,6 +3,7 @@ package config_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -55,7 +56,14 @@ func TestConfigEncode(t *testing.T) {
 		t.Fatalf("Encode() error = %v", err)
 	}
 
-	want := "{\n  \"schemaVersion\": 1,\n  \"workspaceRoot\": \"/home/tester/claude-workspaces\"\n}\n"
+	want := "{\n" +
+		"  \"schemaVersion\": 1,\n" +
+		"  \"workspaceRoot\": \"/home/tester/claude-workspaces\",\n" +
+		"  \"update\": {\n" +
+		"    \"mode\": \"auto\",\n" +
+		"    \"channel\": \"stable\"\n" +
+		"  }\n" +
+		"}\n"
 	if string(data) != want {
 		t.Errorf("Encode() = %q, want %q", data, want)
 	}
@@ -211,7 +219,11 @@ func TestConfigNormalize(t *testing.T) {
 func TestConfigNormalizeFillsInTheSchemaVersion(t *testing.T) {
 	t.Parallel()
 
-	got := config.Config{WorkspaceRoot: "/srv/ws"}.Normalize("/home/tester")
+	got := config.Config{
+		WorkspaceRoot: "/srv/ws",
+	}.Normalize(
+		"/home/tester",
+	)
 	if got.SchemaVersion != config.SchemaVersion {
 		t.Errorf("Normalize().SchemaVersion = %d, want %d", got.SchemaVersion, config.SchemaVersion)
 	}
@@ -232,10 +244,10 @@ func TestConfigValidateRejectsBadPaths(t *testing.T) {
 		name string
 		cfg  config.Config
 	}{
-		{"a relative path", config.Config{SchemaVersion: 1, WorkspaceRoot: "relative/path"}},
-		{"an unexpanded home", config.Config{SchemaVersion: 1, WorkspaceRoot: "~other/ws"}},
-		{"an empty path", config.Config{SchemaVersion: 1, WorkspaceRoot: ""}},
-		{"a whitespace path", config.Config{SchemaVersion: 1, WorkspaceRoot: "   "}},
+		{"a relative path", withRoot("relative/path")},
+		{"an unexpanded home", withRoot("~other/ws")},
+		{"an empty path", withRoot("")},
+		{"a whitespace path", withRoot("   ")},
 	}
 
 	for _, tt := range tests {
@@ -275,7 +287,8 @@ func TestConfigValidateChecksTheSchemaVersion(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := config.Config{SchemaVersion: tt.version, WorkspaceRoot: "/srv/ws"}
+			cfg := withRoot("/srv/ws")
+			cfg.SchemaVersion = tt.version
 
 			err := cfg.Validate()
 			if err == nil {
@@ -333,5 +346,162 @@ func TestSchemaVersionIsNotASetting(t *testing.T) {
 				t.Errorf("%s(schemaVersion) error = %v, want it to wrap ErrNotASetting", op.name, err)
 			}
 		})
+	}
+}
+
+// withRoot returns an otherwise valid document with workspaceRoot set to root.
+func withRoot(root string) config.Config {
+	cfg := config.Default("/home/tester")
+	cfg.WorkspaceRoot = root
+
+	return cfg
+}
+
+func TestUpdateDefaults(t *testing.T) {
+	t.Parallel()
+
+	update := config.Default("/home/tester").Update
+
+	if update.Mode != config.ModeAuto {
+		t.Errorf("Default().Update.Mode = %q, want %q", update.Mode, config.ModeAuto)
+	}
+
+	if update.Channel != config.ChannelStable {
+		t.Errorf("Default().Update.Channel = %q, want %q", update.Channel, config.ChannelStable)
+	}
+}
+
+func TestUpdateSettingsAreAddressable(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{"update.mode", "update.channel"} {
+		if !slices.Contains(config.Settings(), want) {
+			t.Errorf("Settings() = %v, want it to include %q", config.Settings(), want)
+		}
+	}
+}
+
+func TestUpdateGroupIsAddressableAsAWhole(t *testing.T) {
+	t.Parallel()
+
+	value, err := config.Default("/home/tester").Get("update")
+	if err != nil {
+		t.Fatalf("Get(update) error = %v", err)
+	}
+
+	group, ok := value.(config.Update)
+	if !ok {
+		t.Fatalf("Get(update) = %T, want config.Update", value)
+	}
+
+	if group.Mode != config.ModeAuto {
+		t.Errorf("Get(update).Mode = %q, want %q", group.Mode, config.ModeAuto)
+	}
+}
+
+func TestSetEnumSettings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		setting string
+		value   string
+	}{
+		{"the mode", "update.mode", string(config.ModeCheck)},
+		{"the channel", "update.channel", string(config.ChannelPrerelease)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			updated, err := config.Default("/home/tester").Set(tt.setting, tt.value)
+			if err != nil {
+				t.Fatalf("Set(%s) error = %v", tt.setting, err)
+			}
+
+			got, err := updated.Get(tt.setting)
+			if err != nil {
+				t.Fatalf("Get(%s) error = %v", tt.setting, err)
+			}
+
+			if fmt.Sprint(got) != tt.value {
+				t.Errorf("Get(%s) = %v, want %q", tt.setting, got, tt.value)
+			}
+		})
+	}
+}
+
+func TestSetRejectsValuesOutsideAnEnum(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		setting string
+		allowed string
+	}{
+		{"the mode", "update.mode", "auto, check"},
+		{"the channel", "update.channel", "stable, prerelease"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := config.Default("/home/tester").Set(tt.setting, "nonsense")
+			if err == nil {
+				t.Fatalf("Set(%s=nonsense) error = nil, want an error", tt.setting)
+			}
+
+			if !strings.Contains(err.Error(), tt.allowed) {
+				t.Errorf("Set(%s) error = %q, want it to list %q", tt.setting, err, tt.allowed)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsValuesOutsideAnEnum(t *testing.T) {
+	t.Parallel()
+
+	// A hand-edited document does not go through Set, so Validate has to catch
+	// it too.
+	cfg := config.Default("/home/tester")
+	cfg.Update.Mode = "nonsense"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want an error")
+	}
+
+	if !errors.Is(err, config.ErrInvalidSetting) {
+		t.Errorf("Validate() error = %v, want it to wrap ErrInvalidSetting", err)
+	}
+
+	if !strings.Contains(err.Error(), "update.mode") {
+		t.Errorf("Validate() error = %q, want it to name the setting", err)
+	}
+}
+
+func TestNormalizeFillsInBlankEnums(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default("/home/tester")
+	cfg.Update = config.Update{Mode: "", Channel: "  "}
+
+	normalized := cfg.Normalize("/home/tester")
+	if normalized.Update.Mode != config.ModeAuto || normalized.Update.Channel != config.ChannelStable {
+		t.Errorf("Normalize().Update = %+v, want the defaults", normalized.Update)
+	}
+}
+
+func TestEnumValuesAreListedInOrder(t *testing.T) {
+	t.Parallel()
+
+	if got := config.ModeAuto.Values(); !slices.Equal(got, []string{"auto", "check"}) {
+		t.Errorf("Mode.Values() = %v, want [auto check]", got)
+	}
+
+	if got := config.ChannelStable.Values(); !slices.Equal(got, []string{"stable", "prerelease"}) {
+		t.Errorf("Channel.Values() = %v, want [stable prerelease]", got)
 	}
 }
