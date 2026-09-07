@@ -11,13 +11,6 @@ import (
 	"github.com/pdylanross/claude-workspace-manager/pkg/config"
 )
 
-// statusPresent and statusMissing describe the config document in "cwm config
-// paths" output.
-const (
-	statusPresent = "present"
-	statusMissing = "not created yet"
-)
-
 // newConfigCmd builds the "cwm config" command group.
 //
 // It has no run of its own; cobra prints its help and lists the subcommands.
@@ -25,10 +18,7 @@ func newConfigCmd(resolver *paths.Resolver) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Inspect cwm's configuration",
-		Long: "Inspect the configuration cwm keeps for itself.\n\n" +
-			"cwm owns its config document and rewrites it as commands change settings, so\n" +
-			"these subcommands are for finding and reading it rather than for editing it by\n" +
-			"hand.",
+		Long:  "Inspect the configuration cwm keeps for itself: where it lives and what it says.",
 	}
 
 	cmd.AddCommand(newConfigPathsCmd(resolver), newConfigShowCmd(resolver))
@@ -75,11 +65,11 @@ func newConfigPathsCmd(resolver *paths.Resolver) *cobra.Command {
 	return &cobra.Command{
 		Use:   "paths",
 		Short: "Print the directories cwm reads and writes",
-		Long: "Print the config root, the config document inside it, and the cache root.\n\n" +
+		Long: "Print the config root and the cache root.\n\n" +
 			"The config root defaults to cwm's directory under the OS config directory and\n" +
-			"is overridden by " + paths.ConfigRootEnv + ". The cache root defaults to cwm's\n" +
-			"directory under the OS cache directory and is overridden by " + paths.CacheRootEnv +
-			".\nEverything under the cache root is safe to delete.",
+			"the cache root to cwm's directory under the OS cache directory. Set\n" +
+			paths.ConfigRootEnv + " or " + paths.CacheRootEnv + " to override either.\n\n" +
+			"Everything under the cache root is safe to delete.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			configRoot, err := resolver.ConfigRoot()
@@ -92,19 +82,7 @@ func newConfigPathsCmd(resolver *paths.Resolver) *cobra.Command {
 				return fmt.Errorf("resolve the cache root: %w", err)
 			}
 
-			store := config.NewStore(configRoot)
-
-			exists, err := store.Exists()
-			if err != nil {
-				return fmt.Errorf("check for the config document: %w", err)
-			}
-
-			status := statusMissing
-			if exists {
-				status = statusPresent
-			}
-
-			report := renderPaths(configRoot, store.Path()+" ("+status+")", cacheRoot)
+			report := renderPaths(configRoot, cacheRoot)
 			if _, writeErr := io.WriteString(cmd.OutOrStdout(), report); writeErr != nil {
 				return fmt.Errorf("write the paths output: %w", writeErr)
 			}
@@ -114,14 +92,13 @@ func newConfigPathsCmd(resolver *paths.Resolver) *cobra.Command {
 	}
 }
 
-// renderPaths lays the three reported locations out as aligned "key: value"
-// lines, matching the shape of "cwm version".
-func renderPaths(configRoot, configFile, cacheRoot string) string {
+// renderPaths lays the reported locations out as aligned "key: value" lines,
+// matching the shape of "cwm version".
+func renderPaths(configRoot, cacheRoot string) string {
 	var b strings.Builder
 
 	for _, row := range []struct{ key, value string }{
 		{"config root", configRoot},
-		{"config file", configFile},
 		{"cache root", cacheRoot},
 	} {
 		fmt.Fprintf(&b, "%-13s %s\n", row.key+":", row.value)

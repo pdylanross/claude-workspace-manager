@@ -60,63 +60,30 @@ func runConfigCmd(t *testing.T, args ...string) (string, string, error) {
 func TestConfigPathsReportsTheRoots(t *testing.T) {
 	t.Parallel()
 
-	configRoot, out, err := runConfigCmd(t, "config", "paths")
-	if err != nil {
+	root := t.TempDir()
+	env := stubEnv{configRoot: filepath.Join(root, "config"), cacheRoot: filepath.Join(root, "cache")}
+
+	var out bytes.Buffer
+
+	cmd := cli.NewRootCmd(version.Info{}, paths.New(env))
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"config", "paths"})
+
+	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	for _, want := range []string{configRoot, filepath.Join(configRoot, config.FileName), "not created yet"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q, got:\n%s", want, out)
+	got := out.String()
+	for _, want := range []string{"config root: ", env.configRoot, "cache root: ", env.cacheRoot} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q, got:\n%s", want, got)
 		}
 	}
-}
 
-func TestConfigPathsReportsAPresentDocument(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	env := stubEnv{configRoot: filepath.Join(root, "config"), cacheRoot: filepath.Join(root, "cache")}
-
-	if err := config.NewStore(env.configRoot).Save(t.Context(), config.Default()); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	var out bytes.Buffer
-
-	cmd := cli.NewRootCmd(version.Info{}, paths.New(env))
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"config", "paths"})
-
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-
-	if got := out.String(); !strings.Contains(got, "(present)") {
-		t.Errorf("output missing %q, got:\n%s", "(present)", got)
-	}
-}
-
-func TestConfigPathsReportsTheCacheRoot(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	env := stubEnv{configRoot: filepath.Join(root, "config"), cacheRoot: filepath.Join(root, "cache")}
-
-	var out bytes.Buffer
-
-	cmd := cli.NewRootCmd(version.Info{}, paths.New(env))
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"config", "paths"})
-
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-
-	if got := out.String(); !strings.Contains(got, env.cacheRoot) {
-		t.Errorf("output missing the cache root %q, got:\n%s", env.cacheRoot, got)
+	// The document is deliberately not reported here.
+	if strings.Contains(got, config.FileName) {
+		t.Errorf("output names %q, want only the roots, got:\n%s", config.FileName, got)
 	}
 }
 
