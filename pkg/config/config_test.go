@@ -55,7 +55,7 @@ func TestConfigEncode(t *testing.T) {
 		t.Fatalf("Encode() error = %v", err)
 	}
 
-	want := "{\n  \"workspaceRoot\": \"/home/tester/claude-workspaces\"\n}\n"
+	want := "{\n  \"schemaVersion\": 1,\n  \"workspaceRoot\": \"/home/tester/claude-workspaces\"\n}\n"
 	if string(data) != want {
 		t.Errorf("Encode() = %q, want %q", data, want)
 	}
@@ -174,10 +174,12 @@ func TestConfigSetRejectsUnknownSettings(t *testing.T) {
 	}
 }
 
-func TestConfigWithDefaults(t *testing.T) {
+func TestConfigNormalize(t *testing.T) {
 	t.Parallel()
 
-	defaults := config.Default("/home/tester")
+	const home = "/home/tester"
+
+	defaults := config.Default(home)
 
 	tests := []struct {
 		name string
@@ -187,14 +189,148 @@ func TestConfigWithDefaults(t *testing.T) {
 		{"a blank setting takes the default", config.Config{WorkspaceRoot: ""}, defaults.WorkspaceRoot},
 		{"whitespace counts as blank", config.Config{WorkspaceRoot: "  "}, defaults.WorkspaceRoot},
 		{"a set value is kept", config.Config{WorkspaceRoot: "/srv/ws"}, "/srv/ws"},
+		{"a leading tilde expands", config.Config{WorkspaceRoot: "~/ws"}, "/home/tester/ws"},
+		{"a bare tilde is the home directory", config.Config{WorkspaceRoot: "~"}, home},
+		{"a tilde elsewhere is left alone", config.Config{WorkspaceRoot: "/srv/~/ws"}, "/srv/~/ws"},
+		{"another user's home is left alone", config.Config{WorkspaceRoot: "~other/ws"}, "~other/ws"},
+		{"the path is cleaned", config.Config{WorkspaceRoot: "/srv//ws/../ws"}, "/srv/ws"},
+		{"a relative path survives normalising", config.Config{WorkspaceRoot: "relative"}, "relative"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := tt.cfg.WithDefaults(defaults).WorkspaceRoot; got != tt.want {
-				t.Errorf("WithDefaults().WorkspaceRoot = %q, want %q", got, tt.want)
+			if got := tt.cfg.Normalize(home).WorkspaceRoot; got != tt.want {
+				t.Errorf("Normalize().WorkspaceRoot = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigNormalizeFillsInTheSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	got := config.Config{WorkspaceRoot: "/srv/ws"}.Normalize("/home/tester")
+	if got.SchemaVersion != config.SchemaVersion {
+		t.Errorf("Normalize().SchemaVersion = %d, want %d", got.SchemaVersion, config.SchemaVersion)
+	}
+}
+
+func TestConfigValidate(t *testing.T) {
+	t.Parallel()
+
+	if err := config.Default("/home/tester").Validate(); err != nil {
+		t.Errorf("Validate() error = %v, want nil for the defaults", err)
+	}
+}
+
+func TestConfigValidateRejectsBadPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  config.Config
+	}{
+		{"a relative path", config.Config{SchemaVersion: 1, WorkspaceRoot: "relative/path"}},
+		{"an unexpanded home", config.Config{SchemaVersion: 1, WorkspaceRoot: "~other/ws"}},
+		{"an empty path", config.Config{SchemaVersion: 1, WorkspaceRoot: ""}},
+		{"a whitespace path", config.Config{SchemaVersion: 1, WorkspaceRoot: "   "}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate() error = nil, want an error")
+			}
+
+			if !errors.Is(err, config.ErrInvalidSetting) {
+				t.Errorf("Validate() error = %v, want it to wrap ErrInvalidSetting", err)
+			}
+
+			if !strings.Contains(err.Error(), "workspaceRoot") {
+				t.Errorf("Validate() error = %q, want it to name the setting", err)
+			}
+		})
+	}
+}
+
+func TestConfigValidateChecksTheSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		version  int
+		wantText string
+	}{
+		{"a document from a newer cwm", config.SchemaVersion + 1, "upgrade cwm"},
+		{"a document that does not say", 0, "does not say"},
+		{"a nonsensical version", -1, "does not say"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := config.Config{SchemaVersion: tt.version, WorkspaceRoot: "/srv/ws"}
+
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate() error = nil, want an error")
+			}
+
+			if !errors.Is(err, config.ErrUnsupportedSchema) {
+				t.Errorf("Validate() error = %v, want it to wrap ErrUnsupportedSchema", err)
+			}
+
+			if !strings.Contains(err.Error(), tt.wantText) {
+				t.Errorf("Validate() error = %q, want it to mention %q", err, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestSchemaVersionIsSeparateFromTheDefaultsOfEverythingElse(t *testing.T) {
+	t.Parallel()
+
+	// Adding a setting must not force a schema bump: a document from before the
+	// setting existed still loads, taking the default for what it lacks.
+	if got := config.Default("/home/tester").SchemaVersion; got != config.SchemaVersion {
+		t.Errorf("Default().SchemaVersion = %d, want %d", got, config.SchemaVersion)
+	}
+
+	if config.SchemaVersion < 1 {
+		t.Errorf("SchemaVersion = %d, want at least 1", config.SchemaVersion)
+	}
+}
+
+func TestSchemaVersionIsNotASetting(t *testing.T) {
+	t.Parallel()
+
+	if slices.Contains(config.Settings(), "schemaVersion") {
+		t.Errorf("Settings() = %v, want schemaVersion left out of it", config.Settings())
+	}
+
+	for _, op := range []struct {
+		name string
+		run  func() error
+	}{
+		{"get", func() error { _, err := config.Default("/home/tester").Get("schemaVersion"); return err }},
+		{"set", func() error { _, err := config.Default("/home/tester").Set("schemaVersion", "2"); return err }},
+	} {
+		t.Run(op.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := op.run()
+			if err == nil {
+				t.Fatalf("%s(schemaVersion) error = nil, want an error", op.name)
+			}
+
+			if !errors.Is(err, config.ErrNotASetting) {
+				t.Errorf("%s(schemaVersion) error = %v, want it to wrap ErrNotASetting", op.name, err)
 			}
 		})
 	}

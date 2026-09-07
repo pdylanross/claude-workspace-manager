@@ -10,10 +10,13 @@ import (
 	"github.com/pdylanross/claude-workspace-manager/pkg/config"
 )
 
-// testDefaults is the fallback every store in this file is built with. The home
-// directory is fictional on purpose: nothing here should touch the real one.
+// testHome is the home directory every store in this file is built with. It is
+// fictional on purpose: nothing here should touch the real one.
+const testHome = "/home/tester"
+
+// testDefaults is the fallback every store in this file falls back to.
 func testDefaults() config.Config {
-	return config.Default("/home/tester")
+	return config.Default(testHome)
 }
 
 func TestStorePath(t *testing.T) {
@@ -21,7 +24,7 @@ func TestStorePath(t *testing.T) {
 
 	root := t.TempDir()
 
-	if got, want := config.NewStore(root, testDefaults()).Path(), filepath.Join(root, config.FileName); got != want {
+	if got, want := config.NewStore(root, testHome).Path(), filepath.Join(root, config.FileName); got != want {
 		t.Errorf("Path() = %q, want %q", got, want)
 	}
 }
@@ -30,7 +33,7 @@ func TestStoreExists(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	store := config.NewStore(root, testDefaults())
+	store := config.NewStore(root, testHome)
 
 	exists, err := store.Exists()
 	if err != nil {
@@ -67,7 +70,7 @@ func TestStoreExistsOnAnUnreadableRoot(t *testing.T) {
 		t.Fatalf("os.Mkdir() error = %v", err)
 	}
 
-	exists, err := config.NewStore(filepath.Join(root, "nested"), testDefaults()).Exists()
+	exists, err := config.NewStore(filepath.Join(root, "nested"), testHome).Exists()
 	if err == nil {
 		t.Fatalf("Exists() = %t, nil, want an error for an unreadable root", exists)
 	}
@@ -77,7 +80,7 @@ func TestStoreLoadCreatesTheDocumentWhenItIsMissing(t *testing.T) {
 	t.Parallel()
 
 	root := filepath.Join(t.TempDir(), "nested", "cwm")
-	store := config.NewStore(root, testDefaults())
+	store := config.NewStore(root, testHome)
 
 	cfg, err := store.Load(t.Context())
 	if err != nil {
@@ -107,11 +110,11 @@ func TestStoreLoadReadsAnExistingDocument(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	store := config.NewStore(root, testDefaults())
+	store := config.NewStore(root, testHome)
 
 	// A document carrying a field this build does not know about must still
 	// load: an older cwm has to survive a newer cwm's config.
-	document := `{"workspaceRoot": "/srv/workspaces", "unknownFuture": 1}`
+	document := `{"schemaVersion": 1, "workspaceRoot": "/srv/workspaces", "unknownFuture": 1}`
 	if err := os.WriteFile(store.Path(), []byte(document), 0o600); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
@@ -130,7 +133,7 @@ func TestStoreLoadRejectsAMalformedDocument(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	store := config.NewStore(root, testDefaults())
+	store := config.NewStore(root, testHome)
 
 	if err := os.WriteFile(store.Path(), []byte("not json"), 0o600); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
@@ -150,11 +153,11 @@ func TestStoreLoadLeavesAnExistingDocumentAlone(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	store := config.NewStore(root, testDefaults())
+	store := config.NewStore(root, testHome)
 
 	// Unknown fields are the tell: if Load rewrote the document from the
 	// in-memory struct, this field would be gone.
-	document := `{"workspaceRoot": "/srv/workspaces"}`
+	document := `{"schemaVersion": 1, "workspaceRoot": "/srv/workspaces"}`
 	if err := os.WriteFile(store.Path(), []byte(document), 0o600); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
@@ -177,7 +180,7 @@ func TestStoreSavePermissionsAndLeftovers(t *testing.T) {
 	t.Parallel()
 
 	root := filepath.Join(t.TempDir(), "cwm")
-	store := config.NewStore(root, testDefaults())
+	store := config.NewStore(root, testHome)
 
 	if err := store.Save(t.Context(), testDefaults()); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -220,7 +223,7 @@ func TestStoreSaveOverwrites(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	store := config.NewStore(root, testDefaults())
+	store := config.NewStore(root, testHome)
 
 	if err := os.WriteFile(store.Path(), []byte("stale, much longer than the real document"), 0o600); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
@@ -252,7 +255,7 @@ func TestStoreHonoursACancelledContext(t *testing.T) {
 	cancel()
 
 	root := t.TempDir()
-	store := config.NewStore(root, testDefaults())
+	store := config.NewStore(root, testHome)
 
 	if err := store.Save(ctx, testDefaults()); err == nil {
 		t.Error("Save() error = nil, want a context error")
@@ -274,9 +277,10 @@ func TestStoreLoadFillsInBlankFieldsFromTheDefaults(t *testing.T) {
 		name     string
 		document string
 	}{
-		{"the field is absent", `{}`},
-		{"the field is empty", `{"workspaceRoot": ""}`},
-		{"the field is whitespace", `{"workspaceRoot": "   "}`},
+		{"the document is empty", `{}`},
+		{"the setting is empty", `{"workspaceRoot": ""}`},
+		{"the setting is whitespace", `{"workspaceRoot": "   "}`},
+		{"the schema version is absent", `{"workspaceRoot": "/home/tester/claude-workspaces"}`},
 	}
 
 	for _, tt := range tests {
@@ -284,7 +288,7 @@ func TestStoreLoadFillsInBlankFieldsFromTheDefaults(t *testing.T) {
 			t.Parallel()
 
 			root := t.TempDir()
-			store := config.NewStore(root, testDefaults())
+			store := config.NewStore(root, testHome)
 
 			if err := os.WriteFile(store.Path(), []byte(tt.document), 0o600); err != nil {
 				t.Fatalf("os.WriteFile() error = %v", err)
@@ -305,7 +309,7 @@ func TestStoreLoadFillsInBlankFieldsFromTheDefaults(t *testing.T) {
 func TestStoreDefaults(t *testing.T) {
 	t.Parallel()
 
-	if got := config.NewStore(t.TempDir(), testDefaults()).Defaults(); got != testDefaults() {
+	if got := config.NewStore(t.TempDir(), testHome).Defaults(); got != testDefaults() {
 		t.Errorf("Defaults() = %+v, want %+v", got, testDefaults())
 	}
 }
@@ -314,9 +318,13 @@ func TestStoreReset(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	store := config.NewStore(root, testDefaults())
+	store := config.NewStore(root, testHome)
 
-	if err := os.WriteFile(store.Path(), []byte(`{"workspaceRoot": "/srv/workspaces"}`), 0o600); err != nil {
+	if err := os.WriteFile(
+		store.Path(),
+		[]byte(`{"schemaVersion": 1, "workspaceRoot": "/srv/workspaces"}`),
+		0o600,
+	); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
 
@@ -343,7 +351,7 @@ func TestStoreResetCreatesAMissingDocument(t *testing.T) {
 	t.Parallel()
 
 	root := filepath.Join(t.TempDir(), "cwm")
-	store := config.NewStore(root, testDefaults())
+	store := config.NewStore(root, testHome)
 
 	if _, err := store.Reset(t.Context()); err != nil {
 		t.Fatalf("Reset() error = %v", err)
@@ -365,7 +373,7 @@ func TestStoreResetHonoursACancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	store := config.NewStore(t.TempDir(), testDefaults())
+	store := config.NewStore(t.TempDir(), testHome)
 
 	if _, err := store.Reset(ctx); err == nil {
 		t.Error("Reset() error = nil, want a context error")

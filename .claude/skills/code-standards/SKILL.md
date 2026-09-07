@@ -181,6 +181,32 @@ Rules:
   `TestConfigShapeIsAddressable` runs it. A field of a banned kind fails the test suite rather
   than failing at runtime in front of a user.
 
+#### The `cwm` struct tag
+
+Alongside `json`, fields carry cwm's own metadata in a `cwm:"..."` tag (comma-separated):
+
+| Option | Meaning |
+|---|---|
+| `path` | A string holding a filesystem path. `Config.Normalize` expands a leading `~` and cleans it; `Config.Validate` requires it to be absolute. **Every path setting must have it** — a shell may not expand the tilde (bash does after `=`, zsh does not), so cwm cannot assume it received an expanded path. |
+| `internal` | A field cwm maintains for itself. Written to the document, excluded from `Settings()`, and rejected by `Get`/`Set` with `ErrNotASetting`. |
+
+Path handling is tag-driven rather than hand-written per field, because forgetting to expand a
+new path setting is a user-visible bug. Default-filling (`withDefaults`) is the opposite: it is
+written out per setting, because "blank means unset" is a per-setting judgement — a false bool
+is a choice, and an empty string may be a deliberate "no prefix".
+
+#### Schema version
+
+`config.SchemaVersion` describes the **document format** and is unrelated to the cwm binary's
+version. It moves rarely.
+
+- **Adding a setting does not bump it.** An older document lacks the field and gets the default;
+  that is the normal, expected path and needs no migration.
+- **Bump only for a change an older cwm would read _wrongly_ rather than not at all**: a renamed
+  or repurposed setting, or a value whose meaning changes.
+- A document from a *newer* schema is refused on load (`ErrUnsupportedSchema`), and the error
+  says to upgrade cwm — never to reset, which would throw away settings to fix the wrong problem.
+
 ## 4. Library references
 
 `references/` holds dense, version-pinned notes for each non-trivial dependency. **Read the relevant

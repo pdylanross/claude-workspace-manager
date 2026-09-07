@@ -116,9 +116,14 @@ func newConfigSetCmd(resolver *paths.Resolver) *cobra.Command {
 				return err
 			}
 
-			// Normalise before printing, so the output is what Save writes and
-			// what the next read reports: a cleared setting shows its default.
-			updated = updated.WithDefaults(store.Defaults())
+			// Normalise before validating and printing, so the output is what
+			// Save writes and what the next read reports: a cleared setting
+			// shows its default, and "~/ws" shows the expanded path.
+			updated = store.Normalize(updated)
+
+			if validateErr := updated.Validate(); validateErr != nil {
+				return fmt.Errorf("apply the changes: %w", validateErr)
+			}
 
 			if saveErr := store.Save(cmd.Context(), updated); saveErr != nil {
 				return fmt.Errorf("save the configuration: %w", saveErr)
@@ -245,7 +250,7 @@ func newConfigStore(resolver *paths.Resolver) (*config.Store, error) {
 		return nil, fmt.Errorf("resolve the home directory: %w", err)
 	}
 
-	return config.NewStore(root, config.Default(home)), nil
+	return config.NewStore(root, home), nil
 }
 
 // completeSettings completes a setting name.

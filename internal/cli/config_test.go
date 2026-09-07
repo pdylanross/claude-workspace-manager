@@ -57,6 +57,12 @@ func defaultsFor(env stubEnv) config.Config {
 	return config.Default(env.homeDir)
 }
 
+// document renders a config document holding workspaceRoot, at the current
+// schema, the way cwm would have written it.
+func document(workspaceRoot string) string {
+	return `{"schemaVersion": 1, "workspaceRoot": "` + workspaceRoot + `"}`
+}
+
 // runCmd runs args against a fresh command tree built for env, with stdin
 // supplied by input, and returns everything written to stdout and stderr.
 func runCmd(t *testing.T, env stubEnv, input string, args ...string) (string, error) {
@@ -144,7 +150,7 @@ func TestConfigShowPrintsAnExistingDocument(t *testing.T) {
 	t.Parallel()
 
 	env := newStubEnv(t)
-	writeDocument(t, env, `{"workspaceRoot": "/srv/workspaces"}`)
+	writeDocument(t, env, document("/srv/workspaces"))
 
 	out, err := runCmd(t, env, "", "config", "show")
 	if err != nil {
@@ -177,7 +183,7 @@ func TestConfigShowASingleSetting(t *testing.T) {
 	t.Parallel()
 
 	env := newStubEnv(t)
-	writeDocument(t, env, `{"workspaceRoot": "/srv/workspaces"}`)
+	writeDocument(t, env, document("/srv/workspaces"))
 
 	out, err := runCmd(t, env, "", "config", "show", "workspaceRoot")
 	if err != nil {
@@ -269,7 +275,7 @@ func TestConfigSetClearingASettingRestoresItsDefault(t *testing.T) {
 	t.Parallel()
 
 	env := newStubEnv(t)
-	writeDocument(t, env, `{"workspaceRoot": "/srv/workspaces"}`)
+	writeDocument(t, env, document("/srv/workspaces"))
 
 	out, err := runCmd(t, env, "", "config", "set", "workspaceRoot=")
 	if err != nil {
@@ -321,16 +327,16 @@ func TestConfigSetWritesNothingWhenAnAssignmentFails(t *testing.T) {
 	t.Parallel()
 
 	env := newStubEnv(t)
-	document := `{"workspaceRoot": "/srv/workspaces"}`
-	writeDocument(t, env, document)
+	existing := document("/srv/workspaces")
+	writeDocument(t, env, existing)
 
 	// The first assignment is good and the second is not; neither may land.
 	if _, err := runCmd(t, env, "", "config", "set", "workspaceRoot=/changed", "nope=1"); err == nil {
 		t.Fatal("Execute() error = nil, want an error")
 	}
 
-	if got := readDocument(t, env); got != document {
-		t.Errorf("document on disk = %q, want it untouched as %q", got, document)
+	if got := readDocument(t, env); got != existing {
+		t.Errorf("document on disk = %q, want it untouched as %q", got, existing)
 	}
 }
 
@@ -361,7 +367,7 @@ func TestConfigResetDiscardsTheDocument(t *testing.T) {
 			t.Parallel()
 
 			env := newStubEnv(t)
-			writeDocument(t, env, `{"workspaceRoot": "/srv/workspaces"}`)
+			writeDocument(t, env, document("/srv/workspaces"))
 
 			out, err := runCmd(t, env, tt.input, tt.args...)
 			if err != nil {
@@ -407,8 +413,8 @@ func TestConfigResetDeclined(t *testing.T) {
 			t.Parallel()
 
 			env := newStubEnv(t)
-			document := `{"workspaceRoot": "/srv/workspaces"}`
-			writeDocument(t, env, document)
+			existing := document("/srv/workspaces")
+			writeDocument(t, env, existing)
 
 			out, err := runCmd(t, env, tt.input, "config", "reset")
 			if err != nil {
@@ -424,8 +430,8 @@ func TestConfigResetDeclined(t *testing.T) {
 				t.Fatalf("os.ReadFile() error = %v", readErr)
 			}
 
-			if string(data) != document {
-				t.Errorf("document on disk = %q, want it untouched as %q", data, document)
+			if string(data) != existing {
+				t.Errorf("document on disk = %q, want it untouched as %q", data, existing)
 			}
 		})
 	}
@@ -509,4 +515,118 @@ func readDocument(t *testing.T, env stubEnv) string {
 	}
 
 	return string(data)
+}
+
+func TestConfigSetExpandsALeadingTilde(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	// zsh does not expand the tilde in "workspaceRoot=~/ws", so cwm has to.
+	out, err := runCmd(t, env, "", "config", "set", "workspaceRoot=~/ws")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	want := filepath.Join(env.homeDir, "ws")
+	if !strings.Contains(out, want) {
+		t.Errorf("output missing the expanded path %q, got:\n%s", want, out)
+	}
+
+	if got := readDocument(t, env); !strings.Contains(got, want) {
+		t.Errorf("document on disk = %s, want the expanded path %q", got, want)
+	}
+
+	if strings.Contains(readDocument(t, env), "~") {
+		t.Errorf("document on disk still holds a tilde: %s", readDocument(t, env))
+	}
+}
+
+func TestConfigSetRejectsARelativePath(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+	existing := document("/srv/workspaces")
+	writeDocument(t, env, existing)
+
+	out, err := runCmd(t, env, "", "config", "set", "workspaceRoot=relative/path")
+	if err == nil {
+		t.Fatal("Execute() error = nil, want an error for a relative path")
+	}
+
+	if !strings.Contains(out, "absolute path") {
+		t.Errorf("error output missing the reason, got:\n%s", out)
+	}
+
+	if got := readDocument(t, env); got != existing {
+		t.Errorf("document on disk = %q, want it untouched as %q", got, existing)
+	}
+}
+
+func TestConfigShowRejectsADocumentFromANewerCwm(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+	writeDocument(t, env, `{"schemaVersion": 99, "workspaceRoot": "/srv/workspaces"}`)
+
+	out, err := runCmd(t, env, "", "config", "show")
+	if err == nil {
+		t.Fatal("Execute() error = nil, want an error for a newer schema")
+	}
+
+	if !strings.Contains(out, "upgrade cwm") {
+		t.Errorf("error output missing the advice to upgrade, got:\n%s", out)
+	}
+
+	// Wiping the settings is the wrong fix for a document cwm is too old for.
+	if strings.Contains(out, "config reset") {
+		t.Errorf("error output suggests resetting, got:\n%s", out)
+	}
+}
+
+func TestConfigResetRescuesABrokenDocument(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+	writeDocument(t, env, `{"schemaVersion": 1, "workspaceRoot": "relative"}`)
+
+	// Load refuses the document, so reset has to work without reading it.
+	out, err := runCmd(t, env, "", "config", "reset", "-y")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	want := filepath.Join(env.homeDir, config.WorkspaceDirName)
+	if !strings.Contains(out, want) {
+		t.Errorf("output missing the default workspace root %q, got:\n%s", want, out)
+	}
+}
+
+func TestConfigShowRejectsSchemaVersionAsASetting(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	out, err := runCmd(t, env, "", "config", "show", "schemaVersion")
+	if err == nil {
+		t.Fatal("Execute() error = nil, want an error for a field cwm keeps for itself")
+	}
+
+	if !strings.Contains(out, "keeps for itself") {
+		t.Errorf("error output missing the reason, got:\n%s", out)
+	}
+}
+
+func TestConfigShowIncludesTheSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	_, out, err := runConfigCmd(t, "config", "show")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// Not addressable, but still visible in the document it belongs to.
+	if !strings.Contains(out, `"schemaVersion"`) {
+		t.Errorf("output missing the schema version, got:\n%s", out)
+	}
 }

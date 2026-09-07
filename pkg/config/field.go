@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -13,13 +15,38 @@ import (
 // "github.repoPrefix".
 const pathSeparator = "."
 
+// cwmTag carries cwm's own field metadata, alongside the json tag.
+const cwmTag = "cwm"
+
+// Options recognised in a [cwmTag].
+const (
+	// optionPath marks a string setting holding a filesystem path: it is
+	// expanded and cleaned by [Config.Normalize] and required to be absolute by
+	// [Config.Validate].
+	optionPath = "path"
+	// optionInternal marks a field cwm keeps for itself. It is written to the
+	// document, but it is not a setting and cannot be addressed by path.
+	optionInternal = "internal"
+)
+
+// homePrefix is what a user types for their home directory.
+const homePrefix = "~"
+
 // ErrUnknownSetting is returned when a path addresses nothing in the document.
 var ErrUnknownSetting = errors.New("unknown setting")
 
-// ErrNotASetting is returned when a path addresses a group of settings but a
-// single value was required, as when setting "github" rather than a setting
-// beneath it.
-var ErrNotASetting = errors.New("not a single setting")
+// ErrNotASetting is returned when a path addresses something that is in the
+// document but is not a setting to read or change: a group of settings, or a
+// field cwm keeps for itself such as the schema version.
+var ErrNotASetting = errors.New("not a setting")
+
+// ErrInvalidSetting is returned by [Config.Validate] for a setting whose value
+// cwm cannot work with, such as a relative path.
+var ErrInvalidSetting = errors.New("invalid setting")
+
+// ErrUnsupportedSchema is returned when the document's format is not one this
+// build understands. See [SchemaVersion].
+var ErrUnsupportedSchema = errors.New("unsupported document format")
 
 // ErrUnsupportedKind is returned when a field's type cannot be addressed: a
 // slice, array, map, pointer, or anything else with no stable path to a single
@@ -112,7 +139,7 @@ func fieldPaths(t reflect.Type, prefix string) []string {
 		field := t.Field(i)
 
 		name := jsonName(field)
-		if name == "" {
+		if name == "" || hasOption(field, optionInternal) {
 			continue
 		}
 
@@ -183,9 +210,15 @@ func lookupField(v reflect.Value, path string) (reflect.Value, error) {
 			)
 		}
 
-		field, ok := structField(current, segment)
+		field, declared, ok := structField(current, segment)
 		if !ok {
 			return reflect.Value{}, unknownSetting(path, walked, current.Type())
+		}
+
+		if hasOption(declared, optionInternal) {
+			return reflect.Value{}, fmt.Errorf(
+				"%w: %q is part of the document that cwm keeps for itself", ErrNotASetting, joinPath(walked, segment),
+			)
 		}
 
 		current = field
@@ -195,17 +228,91 @@ func lookupField(v reflect.Value, path string) (reflect.Value, error) {
 	return current, nil
 }
 
-// structField returns the field of v whose on-disk name is name.
-func structField(v reflect.Value, name string) (reflect.Value, bool) {
+// structField returns the field of v whose on-disk name is name, along with its
+// declaration so that the caller can read its tags.
+func structField(v reflect.Value, name string) (reflect.Value, reflect.StructField, bool) {
 	t := v.Type()
 
 	for i := range t.NumField() {
-		if jsonName(t.Field(i)) == name {
-			return v.Field(i), true
+		if declared := t.Field(i); jsonName(declared) == name {
+			return v.Field(i), declared, true
 		}
 	}
 
-	return reflect.Value{}, false
+	return reflect.Value{}, reflect.StructField{}, false
+}
+
+// hasOption reports whether field's cwm tag carries option.
+func hasOption(field reflect.StructField, option string) bool {
+	return slices.Contains(strings.Split(field.Tag.Get(cwmTag), ","), option)
+}
+
+// eachPathSetting calls fn for every path setting in cfg, which must be a
+// pointer so that fn can change what it is given.
+func eachPathSetting(cfg *Config, fn func(name string, setting *string) error) error {
+	return walkPathSettings(reflect.ValueOf(cfg).Elem(), "", fn)
+}
+
+// walkPathSettings descends v, calling fn for each field tagged as a path.
+func walkPathSettings(v reflect.Value, prefix string, fn func(name string, setting *string) error) error {
+	t := v.Type()
+
+	for i := range t.NumField() {
+		field := t.Field(i)
+
+		name := jsonName(field)
+		if name == "" {
+			continue
+		}
+
+		path := joinPath(prefix, name)
+
+		if field.Type.Kind() == reflect.Struct {
+			if err := walkPathSettings(v.Field(i), path, fn); err != nil {
+				return err
+			}
+
+			continue
+		}
+
+		if !hasOption(field, optionPath) || field.Type.Kind() != reflect.String {
+			continue
+		}
+
+		setting, ok := reflect.TypeAssert[*string](v.Field(i).Addr())
+		if !ok {
+			continue
+		}
+
+		if err := fn(path, setting); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// expandHome resolves a leading "~" against homeDir and cleans the result.
+//
+// A bare "~user" is left alone: cwm does not know other users' home
+// directories, and leaving it makes it fail the absolute-path check with an
+// error naming the value, rather than being silently turned into something
+// else.
+func expandHome(value, homeDir string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return value
+	}
+
+	if trimmed == homePrefix {
+		return filepath.Clean(homeDir)
+	}
+
+	if rest, found := strings.CutPrefix(trimmed, homePrefix+"/"); found {
+		return filepath.Join(homeDir, rest)
+	}
+
+	return filepath.Clean(trimmed)
 }
 
 // assignField parses value according to field's type and stores it.

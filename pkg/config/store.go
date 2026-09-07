@@ -22,20 +22,26 @@ const (
 //
 // A Store caches nothing, so every Load observes what is actually on disk.
 type Store struct {
-	root     string
-	defaults Config
+	root    string
+	homeDir string
 }
 
 // NewStore returns a Store for the config document under root, which should be
-// an absolute path, falling back to defaults for anything the document does not
-// supply. The root is not created until something is written.
-func NewStore(root string, defaults Config) *Store {
-	return &Store{root: root, defaults: defaults}
+// an absolute path. homeDir is what the defaults are derived from and what a
+// leading "~" in a path setting expands to. The root is not created until
+// something is written.
+func NewStore(root, homeDir string) *Store {
+	return &Store{root: root, homeDir: homeDir}
 }
 
 // Defaults returns the configuration this Store falls back to.
 func (s *Store) Defaults() Config {
-	return s.defaults
+	return Default(s.homeDir)
+}
+
+// Normalize returns cfg as this Store would write it. See [Config.Normalize].
+func (s *Store) Normalize(cfg Config) Config {
+	return cfg.Normalize(s.homeDir)
 }
 
 // Path returns the path of the config document.
@@ -64,9 +70,11 @@ func (s *Store) Exists() (bool, error) {
 //
 // When the document does not exist, Load writes the defaults to disk and
 // returns them, so that the file a user is later told to look at is really
-// there. Fields an existing document omits or leaves blank are filled in from
-// the defaults, which is what lets a document written before a field existed
-// still load; the filled-in values are not written back until the next Save.
+// there. An existing document is normalised — settings it omits or leaves blank
+// come from the defaults, which is what lets a document written before a
+// setting existed still load — and then validated, so a document cwm cannot
+// work with is refused here rather than misbehaving later. The normalised
+// values are not written back until the next Save.
 func (s *Store) Load(ctx context.Context) (Config, error) {
 	if err := ctx.Err(); err != nil {
 		return Config{}, fmt.Errorf("load %s: %w", s.Path(), err)
@@ -75,30 +83,43 @@ func (s *Store) Load(ctx context.Context) (Config, error) {
 	data, readErr := os.ReadFile(s.Path())
 
 	if errors.Is(readErr, fs.ErrNotExist) {
-		if saveErr := s.Save(ctx, s.defaults); saveErr != nil {
+		defaults := s.Defaults()
+		if saveErr := s.Save(ctx, defaults); saveErr != nil {
 			return Config{}, saveErr
 		}
 
-		return s.defaults, nil
+		return defaults, nil
 	}
 
 	if readErr != nil {
 		return Config{}, fmt.Errorf("read %s: %w", s.Path(), readErr)
 	}
 
-	cfg := s.defaults
+	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse %s: %w", s.Path(), err)
 	}
 
-	return cfg.WithDefaults(s.defaults), nil
+	cfg = s.Normalize(cfg)
+	if err := cfg.Validate(); err != nil {
+		// A document from a newer schema is fixed by upgrading cwm, not by
+		// throwing the settings away, so only the other failures say to reset.
+		if errors.Is(err, ErrUnsupportedSchema) {
+			return Config{}, fmt.Errorf("read %s: %w", s.Path(), err)
+		}
+
+		return Config{}, fmt.Errorf("read %s: %w; correct it or run \"cwm config reset\"", s.Path(), err)
+	}
+
+	return cfg, nil
 }
 
 // Save writes cfg to the config document, creating the config root if it is
 // missing.
 //
-// Blank settings are filled in from the defaults first, so the document on disk
-// is always complete and always says what the next Load will report.
+// cfg is normalised and validated first, so the document on disk is always
+// complete, always absolute where a path is expected, and always says what the
+// next Load will report.
 //
 // The write is atomic: cfg goes to a temporary file in the config root and is
 // then renamed over the document, so an interrupted write cannot leave a
@@ -112,7 +133,12 @@ func (s *Store) Save(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("create config root %s: %w", s.root, err)
 	}
 
-	data, encErr := cfg.WithDefaults(s.defaults).Encode()
+	normalized := s.Normalize(cfg)
+	if validateErr := normalized.Validate(); validateErr != nil {
+		return fmt.Errorf("refusing to write %s: %w", s.Path(), validateErr)
+	}
+
+	data, encErr := normalized.Encode()
 	if encErr != nil {
 		return encErr
 	}
@@ -130,11 +156,12 @@ func (s *Store) Save(ctx context.Context, cfg Config) error {
 // This is a plain Save of the defaults rather than a delete: the document is
 // left present and complete, which is the state every other command expects.
 func (s *Store) Reset(ctx context.Context) (Config, error) {
-	if err := s.Save(ctx, s.defaults); err != nil {
+	defaults := s.Defaults()
+	if err := s.Save(ctx, defaults); err != nil {
 		return Config{}, err
 	}
 
-	return s.defaults, nil
+	return defaults, nil
 }
 
 // writeAtomic writes data to path by way of a temporary file in dir, which must
