@@ -262,3 +262,63 @@ Do this in the same change that adds the dependency, not later.
 5. **Register it** in the §4 table above, with version and scope.
 6. **Update on upgrade.** When a dependency's version changes in `go.mod`, re-check its reference: at
    minimum re-run step 2 and diff the API surface. Update the pinned version line either way.
+
+## 6. Pull requests
+
+Derived from PR #1 (`feat: scaffold cwm project structure and version command`) and PR #2
+(`feat: add the config subsystem and cwm config commands`). Read the most recent merged PR before
+writing a new one; this section is the pattern, not a replacement for looking.
+
+### Mechanics
+
+```sh
+gh pr create --base main --head <branch> --title "<title>" --body-file <path>
+```
+
+- **Always `--body-file`**, never an inline `--body`. Bodies contain backticks, quotes and `$`;
+  passing one through the shell mangles it. Write the file to the scratchpad, not the repo.
+- Branch names are `<type>/<topic>`: `feat/config-paths`.
+- Title is the same conventional-commit form as a commit subject — `feat: `, `fix: `, `refactor: `,
+  lowercase after the prefix, no trailing period. It names the whole branch's theme, not the last
+  commit's.
+
+### Body shape
+
+The skeleton, in order:
+
+1. **One opening paragraph** saying what the change is, and — this is the load-bearing half — what
+   it deliberately is *not*. PR #1: "This commit is structure only -- no workspace logic yet."
+   PR #2: "No workspace logic yet -- this is the layer everything else will read its settings from."
+2. **A `Layout:` block** whenever directories are added, two-space indented, `path/` then what lives
+   there. Same for a `Tooling:` block listing what was wired up, or a plain block of command lines
+   for a new CLI surface.
+3. **Prose explaining the decisions**, one topic per paragraph. Not a changelog, not a bullet list
+   of files touched — the diff already says what changed. Say why the non-obvious call was made and
+   what the alternative would have cost.
+4. **The one gotcha, in depth.** Every PR so far has one thing that looks wrong until explained:
+   PR #1 why `exhaustruct_v5` is filtered by a `text:` rule; PR #2 why embedded structs are banned.
+   Give it a full paragraph. A reviewer who has to reverse-engineer it will ask in a comment
+   instead, which is slower for everyone.
+5. **A `Verified` section** listing what was actually run — the §1 procedure plus anything
+   behavioural, with real numbers. Never claim a check that was not run.
+6. **A "Note for reviewers" line** for known gaps: what is untested, illustrative, or deferred, and
+   why. Volunteering the weak spot is cheaper than having it found.
+7. **The harness-provided attribution footer last**, when Claude Code authored the PR.
+
+### Formatting
+
+- **ASCII `--` for em dashes**, not `—`. Both existing PRs do this.
+- **Inline code sparingly.** PR #1 uses backticks on two lines total. Reserve them for identifiers
+  and commands where the monospace actually disambiguates; prose about a package does not need
+  them on every mention.
+- **No markdown headings in a single-subsystem PR** — PR #1 has none, and prose blocks carry it.
+  Add `###` headings only when the PR spans several packages and the reader needs to navigate;
+  PR #2 earns them at six commits across three packages. Pick one and hold it for the whole body.
+- No emoji beyond the attribution footer. No collapsed `<details>` blocks. No screenshots for a CLI
+  — paste the actual terminal output instead.
+
+### Commit messages inside the PR
+
+The PR body is written *from* the commit bodies, condensed — so write each commit message as if it
+were going to be read by a reviewer, because it is. Same rules: subject in conventional-commit
+form, body in prose explaining why, `--` for em dashes, and the harness attribution trailers last.
