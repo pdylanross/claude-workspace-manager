@@ -222,9 +222,11 @@ is larger than what is recallable accurately.
 | Library | Version | File | Scope |
 |---|---|---|---|
 | `github.com/spf13/cobra` | v1.10.2 | `references/cobra.md` | CLI framework: commands, flags, args validation, lifecycle hooks, completions, testing |
+| `golang.org/x/mod/semver` | v0.40.0 | `references/semver.md` | Semantic version comparison for the updater |
 
-Not yet referenced (add on first non-trivial use): git operations, GitHub API, config loading,
-structured logging, TUI.
+Not yet referenced (add on first non-trivial use): git operations, structured logging, TUI. The
+GitHub releases API is read by `internal/update` over plain `net/http` — no client library, so
+nothing to reference.
 
 ## 5. Adding a new reference
 
