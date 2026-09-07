@@ -173,6 +173,175 @@ func TestConfigShowReportsAMalformedDocument(t *testing.T) {
 	}
 }
 
+func TestConfigShowASingleSetting(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+	writeDocument(t, env, `{"workspaceRoot": "/srv/workspaces"}`)
+
+	out, err := runCmd(t, env, "", "config", "show", "workspaceRoot")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// Bare and unquoted, so a shell can use it directly.
+	if want := "/srv/workspaces\n"; out != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+}
+
+func TestConfigShowAnUnknownSetting(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	out, err := runCmd(t, env, "", "config", "show", "nope")
+	if err == nil {
+		t.Fatal("Execute() error = nil, want an error for an unknown setting")
+	}
+
+	for _, want := range []string{"nope", "known settings", "workspaceRoot"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("error output missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestConfigShowRejectsMoreThanOneSetting(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := runConfigCmd(t, "config", "show", "workspaceRoot", "andAnother"); err == nil {
+		t.Error("Execute() error = nil, want an error for a second argument")
+	}
+}
+
+func TestConfigSet(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	out, err := runCmd(t, env, "", "config", "set", "workspaceRoot=/srv/workspaces")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !strings.Contains(out, "/srv/workspaces") {
+		t.Errorf("output missing the new value, got:\n%s", out)
+	}
+
+	if got := readDocument(t, env); !strings.Contains(got, "/srv/workspaces") {
+		t.Errorf("document on disk = %s, want it to hold the new value", got)
+	}
+}
+
+func TestConfigSetTakesSeveralAssignments(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	// Both name the same setting today, because the document has one setting;
+	// what matters is that every argument is applied, last one winning.
+	if _, err := runCmd(t, env, "", "config", "set", "workspaceRoot=/first", "workspaceRoot=/second"); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if got := readDocument(t, env); !strings.Contains(got, "/second") {
+		t.Errorf("document on disk = %s, want the last assignment to win", got)
+	}
+}
+
+func TestConfigSetValuesMayContainSeparators(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	// Only the first "=" separates; the rest belongs to the value.
+	if _, err := runCmd(t, env, "", "config", "set", "workspaceRoot=/srv/a=b"); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if got := readDocument(t, env); !strings.Contains(got, "/srv/a=b") {
+		t.Errorf("document on disk = %s, want the whole value kept", got)
+	}
+}
+
+func TestConfigSetClearingASettingRestoresItsDefault(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+	writeDocument(t, env, `{"workspaceRoot": "/srv/workspaces"}`)
+
+	out, err := runCmd(t, env, "", "config", "set", "workspaceRoot=")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	want := filepath.Join(env.homeDir, config.WorkspaceDirName)
+	if !strings.Contains(out, want) {
+		t.Errorf("output missing the restored default %q, got:\n%s", want, out)
+	}
+
+	if got := readDocument(t, env); !strings.Contains(got, want) {
+		t.Errorf("document on disk = %s, want the default %q", got, want)
+	}
+}
+
+func TestConfigSetRejectsBadArguments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		arg      string
+		wantText string
+	}{
+		{"no separator at all", "workspaceRoot", "SETTING=VALUE"},
+		{"no setting before the separator", "=/srv/workspaces", "does not name a setting"},
+		{"an unknown setting", "nope=1", "known settings"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := newStubEnv(t)
+
+			out, err := runCmd(t, env, "", "config", "set", tt.arg)
+			if err == nil {
+				t.Fatalf("Execute() error = nil, want an error for %q", tt.arg)
+			}
+
+			if !strings.Contains(out, tt.wantText) {
+				t.Errorf("error output missing %q, got:\n%s", tt.wantText, out)
+			}
+		})
+	}
+}
+
+func TestConfigSetWritesNothingWhenAnAssignmentFails(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+	document := `{"workspaceRoot": "/srv/workspaces"}`
+	writeDocument(t, env, document)
+
+	// The first assignment is good and the second is not; neither may land.
+	if _, err := runCmd(t, env, "", "config", "set", "workspaceRoot=/changed", "nope=1"); err == nil {
+		t.Fatal("Execute() error = nil, want an error")
+	}
+
+	if got := readDocument(t, env); got != document {
+		t.Errorf("document on disk = %q, want it untouched as %q", got, document)
+	}
+}
+
+func TestConfigSetNeedsAnArgument(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := runConfigCmd(t, "config", "set"); err == nil {
+		t.Error("Execute() error = nil, want an error when nothing is assigned")
+	}
+}
+
 func TestConfigResetDiscardsTheDocument(t *testing.T) {
 	t.Parallel()
 
@@ -286,7 +455,7 @@ func TestConfigGroupPrintsHelp(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	for _, want := range []string{"paths", "show", "reset", "Usage:"} {
+	for _, want := range []string{"paths", "show", "set", "reset", "Usage:"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help missing %q, got:\n%s", want, out)
 		}
@@ -328,4 +497,16 @@ func writeDocument(t *testing.T, env stubEnv, document string) {
 	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
+}
+
+// readDocument returns the config document under env.
+func readDocument(t *testing.T, env stubEnv) string {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(env.configRoot, config.FileName))
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+
+	return string(data)
 }

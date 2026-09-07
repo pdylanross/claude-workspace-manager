@@ -91,11 +91,14 @@ func (s *Store) Load(ctx context.Context) (Config, error) {
 		return Config{}, fmt.Errorf("parse %s: %w", s.Path(), err)
 	}
 
-	return cfg.withDefaults(s.defaults), nil
+	return cfg.WithDefaults(s.defaults), nil
 }
 
 // Save writes cfg to the config document, creating the config root if it is
 // missing.
+//
+// Blank settings are filled in from the defaults first, so the document on disk
+// is always complete and always says what the next Load will report.
 //
 // The write is atomic: cfg goes to a temporary file in the config root and is
 // then renamed over the document, so an interrupted write cannot leave a
@@ -109,7 +112,7 @@ func (s *Store) Save(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("create config root %s: %w", s.root, err)
 	}
 
-	data, encErr := cfg.Encode()
+	data, encErr := cfg.WithDefaults(s.defaults).Encode()
 	if encErr != nil {
 		return encErr
 	}

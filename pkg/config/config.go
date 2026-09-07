@@ -59,12 +59,14 @@ func (c Config) Encode() ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// withDefaults returns c with every blank field taken from defaults.
+// WithDefaults returns c with every blank setting taken from defaults.
 //
-// A field is blank when the document omitted it or set it to something with no
-// meaning, such as an empty or all-whitespace path. cwm has no setting for
+// A setting is blank when the document omitted it or set it to something with
+// no meaning, such as an empty or all-whitespace path. cwm has no setting for
 // which "unset" is a distinct, useful state, so the default always wins there.
-func (c Config) withDefaults(defaults Config) Config {
+// This is what makes clearing a setting — "cwm config set workspaceRoot=" —
+// mean "put it back to the default" rather than "make it empty".
+func (c Config) WithDefaults(defaults Config) Config {
 	if strings.TrimSpace(c.WorkspaceRoot) == "" {
 		c.WorkspaceRoot = defaults.WorkspaceRoot
 	}

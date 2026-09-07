@@ -146,6 +146,41 @@ re-enable it.
   library is a dependency yet (`testifylint` is configured should `testify` ever be added).
 - Test error paths, not just happy paths. `-race` is mandatory.
 
+### 3.4 Config structs
+
+`pkg/config.Config` and every struct nested in it are addressed by dotted path from the CLI
+(`cwm config set github.repoPrefix=x`, `cwm config show github`). That addressing is what
+constrains their shape.
+
+**Never put a slice, array, or map in a config struct.** There is no stable key for
+`things[2]` or `things["k"]`: `config set` could not name it, `config show` could not print a
+single element of it, and any ordering the user relied on would be an accident of how the file
+was last written. This is not a style preference — it breaks the CLI surface.
+
+| Allowed at a leaf | Never |
+|---|---|
+| `string`, `bool`, `int`/`int64`, `uint`/`uint64`, `float64` | slice, array, map |
+| a named struct, to group settings one level deeper | pointer, interface, channel, func, `any` |
+| | an embedded struct (see below) |
+
+Rules:
+
+- **Every field needs a `json` tag.** The tag, not the Go field name, is the on-disk name and
+  the name a user types. It is the compatibility promise; renaming one is a breaking change.
+  `musttag` enforces the tag's presence, not its stability.
+- **Group with nested structs**, not with prefixes in field names: `Github struct { Enabled
+  bool }` gives `github.enabled` for free.
+- **Never embed a struct.** `encoding/json` promotes an embedded struct's fields to the level
+  above, while a path addresses them one level down — the file and the CLI would disagree
+  about what the setting is called. Give the field a name.
+- **A config struct must stay copyable by assignment.** `cfg2 := cfg` is relied on as a deep
+  copy so a failed `config set` writes nothing. Banning reference types is what makes that true.
+- **Want a list?** Model it as a nested struct with named fields, or keep it out of the config
+  document entirely — its own file under the config root, addressed by its own commands.
+- `pkg/config.CheckShape` walks the type and rejects anything unsupported;
+  `TestConfigShapeIsAddressable` runs it. A field of a banned kind fails the test suite rather
+  than failing at runtime in front of a user.
+
 ## 4. Library references
 
 `references/` holds dense, version-pinned notes for each non-trivial dependency. **Read the relevant
