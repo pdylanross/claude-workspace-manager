@@ -40,3 +40,13 @@ func (OSEnvironment) UserCacheDir() (string, error) {
 
 	return dir, nil
 }
+
+// UserHomeDir reports the current user's home directory. See [os.UserHomeDir].
+func (OSEnvironment) UserHomeDir() (string, error) {
+	dir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("look up the home directory: %w", err)
+	}
+
+	return dir, nil
+}

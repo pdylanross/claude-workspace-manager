@@ -15,8 +15,10 @@ type fakeEnv struct {
 	vars      map[string]string
 	configDir string
 	cacheDir  string
+	homeDir   string
 	configErr error
 	cacheErr  error
+	homeErr   error
 }
 
 func (f fakeEnv) LookupEnv(key string) (string, bool) {
@@ -28,6 +30,8 @@ func (f fakeEnv) LookupEnv(key string) (string, bool) {
 func (f fakeEnv) UserConfigDir() (string, error) { return f.configDir, f.configErr }
 
 func (f fakeEnv) UserCacheDir() (string, error) { return f.cacheDir, f.cacheErr }
+
+func (f fakeEnv) UserHomeDir() (string, error) { return f.homeDir, f.homeErr }
 
 func TestResolverRoots(t *testing.T) {
 	t.Parallel()
@@ -186,5 +190,53 @@ func TestResolverOverrideSurvivesAFailedLookup(t *testing.T) {
 
 	if want := "/srv/cwm-config"; got != want {
 		t.Errorf("ConfigRoot() = %q, want %q", got, want)
+	}
+}
+
+func TestResolverHomeDir(t *testing.T) {
+	t.Parallel()
+
+	resolver := paths.New(fakeEnv{homeDir: "/home/u"})
+
+	got, err := resolver.HomeDir()
+	if err != nil {
+		t.Fatalf("HomeDir() error = %v", err)
+	}
+
+	if want := "/home/u"; got != want {
+		t.Errorf("HomeDir() = %q, want %q", got, want)
+	}
+}
+
+func TestResolverHomeDirPropagatesFailures(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("no home directory")
+
+	got, err := paths.New(fakeEnv{homeErr: sentinel}).HomeDir()
+	if err == nil {
+		t.Fatalf("HomeDir() = %q, want an error", got)
+	}
+
+	if !errors.Is(err, sentinel) {
+		t.Errorf("HomeDir() error = %v, want it to wrap %v", err, sentinel)
+	}
+}
+
+func TestResolverHomeDirIgnoresTheRootOverrides(t *testing.T) {
+	t.Parallel()
+
+	resolver := paths.New(fakeEnv{
+		vars:    map[string]string{paths.ConfigRootEnv: "/srv/config", paths.CacheRootEnv: "/srv/cache"},
+		homeDir: "/home/u",
+	})
+
+	got, err := resolver.HomeDir()
+	if err != nil {
+		t.Fatalf("HomeDir() error = %v", err)
+	}
+
+	if want := "/home/u"; got != want {
+		t.Errorf("HomeDir() = %q, want %q", got, want)
 	}
 }

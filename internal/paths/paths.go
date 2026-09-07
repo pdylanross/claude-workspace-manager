@@ -37,6 +37,8 @@ type Environment interface {
 	UserConfigDir() (string, error)
 	// UserCacheDir reports the OS user cache directory, as [os.UserCacheDir].
 	UserCacheDir() (string, error)
+	// UserHomeDir reports the current user's home directory, as [os.UserHomeDir].
+	UserHomeDir() (string, error)
 }
 
 // Resolver resolves cwm's roots against an [Environment].
@@ -71,6 +73,19 @@ func (r *Resolver) ConfigRoot() (string, error) {
 // reconstructible.
 func (r *Resolver) CacheRoot() (string, error) {
 	return r.root("cache", CacheRootEnv, r.env.UserCacheDir)
+}
+
+// HomeDir returns the current user's home directory.
+//
+// Unlike the roots above this has no override: it is the OS's answer, and the
+// settings derived from it are overridden in the config document instead.
+func (r *Resolver) HomeDir() (string, error) {
+	dir, err := r.env.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locate the home directory: %w", err)
+	}
+
+	return dir, nil
 }
 
 // root returns the override named by envVar when it is set to a non-blank

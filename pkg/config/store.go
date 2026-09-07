@@ -20,16 +20,22 @@ const (
 
 // Store reads and writes the config document under one config root.
 //
-// A Store holds no state beyond that root: it does not cache the document, so
-// every Load observes what is actually on disk.
+// A Store caches nothing, so every Load observes what is actually on disk.
 type Store struct {
-	root string
+	root     string
+	defaults Config
 }
 
 // NewStore returns a Store for the config document under root, which should be
-// an absolute path. The root is not created until something is written.
-func NewStore(root string) *Store {
-	return &Store{root: root}
+// an absolute path, falling back to defaults for anything the document does not
+// supply. The root is not created until something is written.
+func NewStore(root string, defaults Config) *Store {
+	return &Store{root: root, defaults: defaults}
+}
+
+// Defaults returns the configuration this Store falls back to.
+func (s *Store) Defaults() Config {
+	return s.defaults
 }
 
 // Path returns the path of the config document.
@@ -56,10 +62,11 @@ func (s *Store) Exists() (bool, error) {
 
 // Load reads the config document.
 //
-// When the document does not exist, Load writes [Default] to disk and returns
-// it, so that the file a user is later told to look at is really there. Fields
-// absent from an existing document are left at their Go zero value; the
-// defaults are not merged into a document that already exists.
+// When the document does not exist, Load writes the defaults to disk and
+// returns them, so that the file a user is later told to look at is really
+// there. Fields an existing document omits or leaves blank are filled in from
+// the defaults, which is what lets a document written before a field existed
+// still load; the filled-in values are not written back until the next Save.
 func (s *Store) Load(ctx context.Context) (Config, error) {
 	if err := ctx.Err(); err != nil {
 		return Config{}, fmt.Errorf("load %s: %w", s.Path(), err)
@@ -68,24 +75,23 @@ func (s *Store) Load(ctx context.Context) (Config, error) {
 	data, readErr := os.ReadFile(s.Path())
 
 	if errors.Is(readErr, fs.ErrNotExist) {
-		cfg := Default()
-		if saveErr := s.Save(ctx, cfg); saveErr != nil {
+		if saveErr := s.Save(ctx, s.defaults); saveErr != nil {
 			return Config{}, saveErr
 		}
 
-		return cfg, nil
+		return s.defaults, nil
 	}
 
 	if readErr != nil {
 		return Config{}, fmt.Errorf("read %s: %w", s.Path(), readErr)
 	}
 
-	var cfg Config
+	cfg := s.defaults
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse %s: %w", s.Path(), err)
 	}
 
-	return cfg, nil
+	return cfg.withDefaults(s.defaults), nil
 }
 
 // Save writes cfg to the config document, creating the config root if it is
@@ -113,6 +119,19 @@ func (s *Store) Save(ctx context.Context, cfg Config) error {
 	}
 
 	return nil
+}
+
+// Reset overwrites the config document with the defaults, discarding whatever
+// it held.
+//
+// This is a plain Save of the defaults rather than a delete: the document is
+// left present and complete, which is the state every other command expects.
+func (s *Store) Reset(ctx context.Context) (Config, error) {
+	if err := s.Save(ctx, s.defaults); err != nil {
+		return Config{}, err
+	}
+
+	return s.defaults, nil
 }
 
 // writeAtomic writes data to path by way of a temporary file in dir, which must

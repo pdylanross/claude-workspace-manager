@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -21,7 +23,11 @@ func newConfigCmd(resolver *paths.Resolver) *cobra.Command {
 		Long:  "Inspect the configuration cwm keeps for itself: where it lives and what it says.",
 	}
 
-	cmd.AddCommand(newConfigPathsCmd(resolver), newConfigShowCmd(resolver))
+	cmd.AddCommand(
+		newConfigPathsCmd(resolver),
+		newConfigShowCmd(resolver),
+		newConfigResetCmd(resolver),
+	)
 
 	return cmd
 }
@@ -36,28 +42,67 @@ func newConfigShowCmd(resolver *paths.Resolver) *cobra.Command {
 			"the output always matches what is on disk.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			root, err := resolver.ConfigRoot()
+			store, err := newConfigStore(resolver)
 			if err != nil {
-				return fmt.Errorf("resolve the config root: %w", err)
+				return err
 			}
 
-			cfg, err := config.NewStore(root).Load(cmd.Context())
+			cfg, err := store.Load(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("load the configuration: %w", err)
 			}
 
-			data, err := cfg.Encode()
-			if err != nil {
-				return fmt.Errorf("render the configuration: %w", err)
-			}
-
-			if _, writeErr := cmd.OutOrStdout().Write(data); writeErr != nil {
-				return fmt.Errorf("write the configuration: %w", writeErr)
-			}
-
-			return nil
+			return writeConfig(cmd, cfg)
 		},
 	}
+}
+
+// newConfigResetCmd builds the "cwm config reset" command.
+func newConfigResetCmd(resolver *paths.Resolver) *cobra.Command {
+	var assumeYes bool
+
+	cmd := &cobra.Command{
+		Use:   "reset",
+		Short: "Discard the cwm configuration and take the defaults",
+		Long: "Overwrite the cwm configuration document with cwm's defaults.\n\n" +
+			"Every setting goes, not only the ones that differ from a default, and the\n" +
+			"document is rewritten rather than deleted. cwm asks for confirmation first\n" +
+			"unless --yes is given; a run with nothing on its input declines.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			store, err := newConfigStore(resolver)
+			if err != nil {
+				return err
+			}
+
+			if !assumeYes {
+				confirmed, confirmErr := confirm(cmd, "Discard "+store.Path()+" and take the defaults?")
+				if confirmErr != nil {
+					return confirmErr
+				}
+
+				if !confirmed {
+					_, writeErr := io.WriteString(cmd.OutOrStdout(), "cancelled, nothing was written\n")
+					if writeErr != nil {
+						return fmt.Errorf("write the reset output: %w", writeErr)
+					}
+
+					return nil
+				}
+			}
+
+			cfg, err := store.Reset(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("reset the configuration: %w", err)
+			}
+
+			return writeConfig(cmd, cfg)
+		},
+	}
+
+	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "do not ask for confirmation")
+
+	return cmd
 }
 
 // newConfigPathsCmd builds the "cwm config paths" command.
@@ -89,6 +134,60 @@ func newConfigPathsCmd(resolver *paths.Resolver) *cobra.Command {
 
 			return nil
 		},
+	}
+}
+
+// newConfigStore resolves the config root and the defaults that depend on the
+// home directory, and returns the store the config commands work through.
+func newConfigStore(resolver *paths.Resolver) (*config.Store, error) {
+	root, err := resolver.ConfigRoot()
+	if err != nil {
+		return nil, fmt.Errorf("resolve the config root: %w", err)
+	}
+
+	home, err := resolver.HomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve the home directory: %w", err)
+	}
+
+	return config.NewStore(root, config.Default(home)), nil
+}
+
+// writeConfig prints cfg as JSON on the command's output.
+func writeConfig(cmd *cobra.Command, cfg config.Config) error {
+	data, err := cfg.Encode()
+	if err != nil {
+		return fmt.Errorf("render the configuration: %w", err)
+	}
+
+	if _, writeErr := cmd.OutOrStdout().Write(data); writeErr != nil {
+		return fmt.Errorf("write the configuration: %w", writeErr)
+	}
+
+	return nil
+}
+
+// confirm puts question to the user and reads the answer from the command's
+// input.
+//
+// Anything but "y" or "yes" is a no, including an empty answer and an input
+// that is already at EOF, so a non-interactive run declines rather than
+// destroying something unattended.
+func confirm(cmd *cobra.Command, question string) (bool, error) {
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s [y/N]: ", question); err != nil {
+		return false, fmt.Errorf("write the confirmation prompt: %w", err)
+	}
+
+	answer, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read the confirmation: %w", err)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
 	}
 }
 

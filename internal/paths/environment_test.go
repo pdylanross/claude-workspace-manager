@@ -34,6 +34,17 @@ func TestOSEnvironmentReadsTheProcess(t *testing.T) {
 		t.Errorf("UserCacheDir() = %q, want %q", gotCache, wantCache)
 	}
 
+	wantHome, wantHomeErr := os.UserHomeDir()
+
+	gotHome, err := env.UserHomeDir()
+	if (err != nil) != (wantHomeErr != nil) {
+		t.Fatalf("UserHomeDir() error = %v, want an error = %v", err, wantHomeErr != nil)
+	}
+
+	if err == nil && gotHome != wantHome {
+		t.Errorf("UserHomeDir() = %q, want %q", gotHome, wantHome)
+	}
+
 	wantValue, wantOK := os.LookupEnv("PATH")
 
 	gotValue, gotOK := env.LookupEnv("PATH")
