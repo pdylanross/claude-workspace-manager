@@ -35,6 +35,13 @@ const (
 	maxArchiveBytes = 128 << 20
 )
 
+// CredentialEnvs lists the environment variables cwm reads a GitHub credential
+// from, most specific first: cwm's own, so one can be given to cwm alone, then
+// the conventional one every other tool already uses.
+func CredentialEnvs() []string {
+	return []string{"CWM_GITHUB_TOKEN", "GITHUB_TOKEN"}
+}
+
 // ErrRequestFailed is returned when GitHub answers with something other than
 // success.
 var ErrRequestFailed = errors.New("github request failed")
@@ -42,29 +49,35 @@ var ErrRequestFailed = errors.New("github request failed")
 // ErrTooLarge is returned when a response exceeds the limit for its kind.
 var ErrTooLarge = errors.New("response is larger than expected")
 
-// Client reads releases and their assets from GitHub.
-type Client struct {
-	httpClient *http.Client
-	baseURL    string
-	repo       string
-	userAgent  string
+// ClientOptions is what a [Client] is built from.
+type ClientOptions struct {
+	// HTTPClient carries the timeout; it is required.
+	HTTPClient *http.Client
+	// BaseURL is the API root, normally [DefaultAPIBaseURL].
+	BaseURL string
+	// Repo is "owner/name".
+	Repo string
+	// UserAgent identifies cwm, which GitHub requires.
+	UserAgent string
+	// Token authenticates the request. Empty means anonymous, which is enough
+	// for a public repository and gets a 404 for anything else.
+	Token string
 }
 
-// NewClient returns a Client reading repo ("owner/name") from the API at
-// baseURL. userAgent identifies cwm to GitHub, which requires one.
-func NewClient(httpClient *http.Client, baseURL, repo, userAgent string) *Client {
-	return &Client{
-		httpClient: httpClient,
-		baseURL:    baseURL,
-		repo:       repo,
-		userAgent:  userAgent,
-	}
+// Client reads releases and their assets from GitHub.
+type Client struct {
+	options ClientOptions
+}
+
+// NewClient returns a Client reading releases as described by options.
+func NewClient(options ClientOptions) *Client {
+	return &Client{options: options}
 }
 
 // Releases returns the most recent releases, newest first, with drafts left
 // out. A draft is not published, so from cwm's side it does not exist.
 func (c *Client) Releases(ctx context.Context) ([]Release, error) {
-	endpoint, err := url.JoinPath(c.baseURL, "repos", c.repo, "releases")
+	endpoint, err := url.JoinPath(c.options.BaseURL, "repos", c.options.Repo, "releases")
 	if err != nil {
 		return nil, fmt.Errorf("build the releases url: %w", err)
 	}
@@ -112,15 +125,28 @@ func (c *Client) get(ctx context.Context, endpoint, accept string, limit int64) 
 	}
 
 	request.Header.Set("Accept", accept)
-	request.Header.Set("User-Agent", c.userAgent)
+	request.Header.Set("User-Agent", c.options.UserAgent)
 	request.Header.Set("X-Github-Api-Version", "2022-11-28")
 
-	response, err := c.httpClient.Do(request)
+	if c.options.Token != "" {
+		request.Header.Set("Authorization", "Bearer "+c.options.Token)
+	}
+
+	response, err := c.options.HTTPClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("request %s: %w", endpoint, err)
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
+	if response.StatusCode == http.StatusNotFound {
+		// GitHub answers 404 rather than 403 for a repository the caller cannot
+		// see, so this is what a private repository looks like from here.
+		return nil, fmt.Errorf(
+			"%w: %s returned %s; the repository may be private, in which case set %s to a credential that can read it",
+			ErrRequestFailed, endpoint, response.Status, CredentialEnvs()[0],
+		)
+	}
 
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: %s returned %s", ErrRequestFailed, endpoint, response.Status)

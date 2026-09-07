@@ -18,7 +18,9 @@ import (
 func Execute(info version.Info) error {
 	resolver := paths.New(paths.NewOSEnvironment())
 
-	if err := newRootCmd(info, resolver).Execute(); err != nil {
+	newUpdater := func() (Updater, error) { return newOSUpdater(resolver, info) }
+
+	if err := newRootCmd(info, resolver, newUpdater).Execute(); err != nil {
 		return fmt.Errorf("execute cwm: %w", err)
 	}
 

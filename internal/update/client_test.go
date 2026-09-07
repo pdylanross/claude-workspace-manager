@@ -29,7 +29,13 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*update.Client, stri
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
-	return update.NewClient(server.Client(), server.URL, "owner/repo", "cwm-test"), server.URL
+	return update.NewClient(update.ClientOptions{
+		HTTPClient: server.Client(),
+		BaseURL:    server.URL,
+		Repo:       "owner/repo",
+		UserAgent:  "cwm-test",
+		Token:      "",
+	}), server.URL
 }
 
 func TestClientReleases(t *testing.T) {
@@ -129,5 +135,95 @@ func TestClientHonoursACancelledContext(t *testing.T) {
 
 	if _, err := client.Releases(ctx); err == nil {
 		t.Error("Releases() error = nil, want a context error")
+	}
+}
+
+func TestClientSendsTheCredential(t *testing.T) {
+	t.Parallel()
+
+	var authorization string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+
+		_, _ = w.Write([]byte(releasesJSON))
+	}))
+
+	t.Cleanup(server.Close)
+
+	client := update.NewClient(update.ClientOptions{
+		HTTPClient: server.Client(),
+		BaseURL:    server.URL,
+		Repo:       "owner/repo",
+		UserAgent:  "cwm-test",
+		Token:      "a-credential",
+	})
+
+	if _, err := client.Releases(t.Context()); err != nil {
+		t.Fatalf("Releases() error = %v", err)
+	}
+
+	// Without this header a private repository answers 404, and the whole
+	// update mechanism silently believes there is nothing to install.
+	if want := "Bearer a-credential"; authorization != want {
+		t.Errorf("Authorization = %q, want %q", authorization, want)
+	}
+}
+
+func TestClientStaysAnonymousWithoutACredential(t *testing.T) {
+	t.Parallel()
+
+	var seen bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, seen = r.Header["Authorization"]
+
+		_, _ = w.Write([]byte(releasesJSON))
+	}))
+
+	t.Cleanup(server.Close)
+
+	client := update.NewClient(update.ClientOptions{
+		HTTPClient: server.Client(),
+		BaseURL:    server.URL,
+		Repo:       "owner/repo",
+		UserAgent:  "cwm-test",
+		Token:      "",
+	})
+
+	if _, err := client.Releases(t.Context()); err != nil {
+		t.Fatalf("Releases() error = %v", err)
+	}
+
+	if seen {
+		t.Error("request carried an Authorization header with no credential configured")
+	}
+}
+
+func TestClientExplainsAMissingRepository(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+
+	_, err := client.Releases(t.Context())
+	if !errors.Is(err, update.ErrRequestFailed) {
+		t.Fatalf("Releases() error = %v, want ErrRequestFailed", err)
+	}
+
+	// A private repository is indistinguishable from a missing one from here,
+	// so the error has to name the way out.
+	if !strings.Contains(err.Error(), update.CredentialEnvs()[0]) {
+		t.Errorf("Releases() error = %q, want it to name %q", err, update.CredentialEnvs()[0])
+	}
+}
+
+func TestCredentialEnvsPrefersCwmsOwn(t *testing.T) {
+	t.Parallel()
+
+	envs := update.CredentialEnvs()
+	if len(envs) != 2 || envs[0] != "CWM_GITHUB_TOKEN" || envs[1] != "GITHUB_TOKEN" {
+		t.Errorf("CredentialEnvs() = %v, want cwm's own first", envs)
 	}
 }

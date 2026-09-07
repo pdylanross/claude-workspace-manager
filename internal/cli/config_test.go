@@ -68,9 +68,16 @@ func document(workspaceRoot string) string {
 func runCmd(t *testing.T, env stubEnv, input string, args ...string) (string, error) {
 	t.Helper()
 
+	return runCmdWith(t, env, &stubUpdater{updatable: false, due: false}, input, args...)
+}
+
+// runCmdWith is runCmd against a specific updater.
+func runCmdWith(t *testing.T, env stubEnv, updater *stubUpdater, input string, args ...string) (string, error) {
+	t.Helper()
+
 	var out bytes.Buffer
 
-	cmd := cli.NewRootCmd(version.Info{}, paths.New(env))
+	cmd := cli.NewRootCmd(version.Info{Version: "1.2.0", Commit: "", Date: ""}, paths.New(env), updater.factory())
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	cmd.SetIn(strings.NewReader(input))

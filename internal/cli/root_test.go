@@ -47,7 +47,7 @@ func TestVersionCommand(t *testing.T) {
 
 			var out bytes.Buffer
 
-			cmd := cli.NewRootCmd(info, paths.New(paths.NewOSEnvironment()))
+			cmd := cli.NewRootCmd(info, paths.New(paths.NewOSEnvironment()), stubUpdaterFactory())
 			cmd.SetOut(&out)
 			cmd.SetErr(&out)
 			cmd.SetArgs(tt.args)
@@ -80,7 +80,7 @@ func TestVersionCommandRejectsArgs(t *testing.T) {
 
 	var out bytes.Buffer
 
-	cmd := cli.NewRootCmd(version.Info{}, paths.New(paths.NewOSEnvironment()))
+	cmd := cli.NewRootCmd(version.Info{}, paths.New(paths.NewOSEnvironment()), stubUpdaterFactory())
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	cmd.SetArgs([]string{"version", "unexpected"})

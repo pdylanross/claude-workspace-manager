@@ -8,6 +8,9 @@ import (
 )
 
 // NewRootCmd exposes the unexported root command builder to the cli_test package.
-func NewRootCmd(info version.Info, resolver *paths.Resolver) *cobra.Command {
-	return newRootCmd(info, resolver)
+func NewRootCmd(info version.Info, resolver *paths.Resolver, newUpdater UpdaterFactory) *cobra.Command {
+	return newRootCmd(info, resolver, updaterFactory(newUpdater))
 }
+
+// UpdaterFactory exposes the updater constructor the commands are built with.
+type UpdaterFactory = func() (Updater, error)

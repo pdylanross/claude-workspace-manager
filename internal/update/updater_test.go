@@ -52,7 +52,13 @@ func releaseServer(t *testing.T, tag string, archive []byte) *httptest.Server {
 func newTestUpdater(t *testing.T, server *httptest.Server, current string, now time.Time) *update.Updater {
 	t.Helper()
 
-	client := update.NewClient(server.Client(), server.URL, "owner/repo", "cwm-test")
+	client := update.NewClient(update.ClientOptions{
+		HTTPClient: server.Client(),
+		BaseURL:    server.URL,
+		Repo:       "owner/repo",
+		UserAgent:  "cwm-test",
+		Token:      "",
+	})
 
 	return update.NewUpdater(client, cache.New(t.TempDir()), current, fixedClock(now))
 }
@@ -102,7 +108,13 @@ func TestUpdaterDue(t *testing.T) {
 				t.Fatalf("WriteTime() error = %v", err)
 			}
 
-			client := update.NewClient(server.Client(), server.URL, "owner/repo", "cwm-test")
+			client := update.NewClient(update.ClientOptions{
+				HTTPClient: server.Client(),
+				BaseURL:    server.URL,
+				Repo:       "owner/repo",
+				UserAgent:  "cwm-test",
+				Token:      "",
+			})
 
 			updater := update.NewUpdater(client, entries, "1.0.0", fixedClock(now))
 			if got := updater.Due(); got != tt.want {
@@ -133,7 +145,13 @@ func TestUpdaterDueWithAnUnreadableEntry(t *testing.T) {
 	}
 
 	server := releaseServer(t, "v1.2.0", nil)
-	client := update.NewClient(server.Client(), server.URL, "owner/repo", "cwm-test")
+	client := update.NewClient(update.ClientOptions{
+		HTTPClient: server.Client(),
+		BaseURL:    server.URL,
+		Repo:       "owner/repo",
+		UserAgent:  "cwm-test",
+		Token:      "",
+	})
 
 	// A cache that cannot be read is a cache that says nothing, and the safe
 	// answer to "have we checked lately" is no.
@@ -148,7 +166,13 @@ func TestUpdaterMarkChecked(t *testing.T) {
 	now := time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC)
 	entries := cache.New(t.TempDir())
 	server := releaseServer(t, "v1.2.0", nil)
-	client := update.NewClient(server.Client(), server.URL, "owner/repo", "cwm-test")
+	client := update.NewClient(update.ClientOptions{
+		HTTPClient: server.Client(),
+		BaseURL:    server.URL,
+		Repo:       "owner/repo",
+		UserAgent:  "cwm-test",
+		Token:      "",
+	})
 	updater := update.NewUpdater(client, entries, "1.0.0", fixedClock(now))
 
 	if err := updater.MarkChecked(); err != nil {
