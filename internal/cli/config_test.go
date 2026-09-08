@@ -778,3 +778,77 @@ func TestConfigShowKeepsTheForgeKindWhenUnconfigured(t *testing.T) {
 		t.Errorf("output does not say the forge is unconfigured, got:\n%s", out)
 	}
 }
+
+func TestConfigSetReportsOnlyWhatChanged(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	out, err := runCmd(t, env, "", "config", "set", "update.mode=check")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if want := "update.mode  check\n"; out != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+}
+
+func TestConfigSetShowsASettingTheListingWouldHide(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	if _, err := runCmd(t, env, "", "config", "set", "forge.kind=github"); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// The grouped listing hides the other forge's settings. Whatever was just
+	// set has to be visible anyway, or the command silently does nothing
+	// visible at all.
+	out, err := runCmd(t, env, "", "config", "set", "forge.gitlab.space=work/team")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !strings.Contains(out, "forge.gitlab.space") || !strings.Contains(out, "work/team") {
+		t.Errorf("output does not show the setting that was just changed, got:\n%s", out)
+	}
+}
+
+func TestConfigSetReportsASettingNamedTwiceOnce(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	out, err := runCmd(t, env, "", "config", "set", "workspaceRoot=/srv/first", "workspaceRoot=/srv/second")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if strings.Count(out, "workspaceRoot") != 1 {
+		t.Errorf("output names the setting more than once, got:\n%s", out)
+	}
+
+	if !strings.Contains(out, "/srv/second") {
+		t.Errorf("output does not show the value that won, got:\n%s", out)
+	}
+}
+
+func TestConfigSetReportsTheStoredValue(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	// Not the value as typed: what was written is what is reported, so a
+	// cleared setting shows the default it fell back to.
+	out, err := runCmd(t, env, "", "config", "set", "workspaceRoot=")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	want := filepath.Join(env.homeDir, config.WorkspaceDirName)
+	if !strings.Contains(out, want) {
+		t.Errorf("output = %q, want the restored default %q", out, want)
+	}
+}

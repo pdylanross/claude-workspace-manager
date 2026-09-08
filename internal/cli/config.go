@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -170,7 +171,7 @@ func newConfigSetCmd(resolver *paths.Resolver) *cobra.Command {
 				return fmt.Errorf("load the configuration: %w", err)
 			}
 
-			updated, err := applyAssignments(cfg, args)
+			updated, changed, err := applyAssignments(cfg, args)
 			if err != nil {
 				return err
 			}
@@ -188,7 +189,12 @@ func newConfigSetCmd(resolver *paths.Resolver) *cobra.Command {
 				return fmt.Errorf("save the configuration: %w", saveErr)
 			}
 
-			return writeConfig(cmd, updated)
+			listing, err := renderChanged(cmd, updated, changed)
+			if err != nil {
+				return err
+			}
+
+			return writeOut(cmd, []byte(listing))
 		},
 	}
 }
@@ -270,35 +276,43 @@ func newConfigPathsCmd(resolver *paths.Resolver) *cobra.Command {
 	}
 }
 
-// applyAssignments parses "setting=value" arguments and applies them all to cfg.
+// applyAssignments parses "setting=value" arguments and applies them all to
+// cfg, returning the settings it touched in the order they were first named.
 //
 // Nothing is applied to the caller's copy until every assignment has parsed, so
 // a bad argument in the middle of a run changes nothing.
-func applyAssignments(cfg config.Config, args []string) (config.Config, error) {
+func applyAssignments(cfg config.Config, args []string) (config.Config, []string, error) {
 	updated := cfg
+
+	var changed []string
 
 	for _, arg := range args {
 		setting, value, ok := strings.Cut(arg, assignment)
 		if !ok {
-			return config.Config{}, fmt.Errorf(
+			return config.Config{}, nil, fmt.Errorf(
 				"%q is not a setting assignment; write it as SETTING%sVALUE", arg, assignment,
 			)
 		}
 
 		setting = strings.TrimSpace(setting)
 		if setting == "" {
-			return config.Config{}, fmt.Errorf("%q does not name a setting", arg)
+			return config.Config{}, nil, fmt.Errorf("%q does not name a setting", arg)
 		}
 
 		next, err := updated.Set(setting, value)
 		if err != nil {
-			return config.Config{}, fmt.Errorf("apply %q: %w", arg, err)
+			return config.Config{}, nil, fmt.Errorf("apply %q: %w", arg, err)
 		}
 
 		updated = next
+
+		// Naming one setting twice reports it once, with the value that won.
+		if !slices.Contains(changed, setting) {
+			changed = append(changed, setting)
+		}
 	}
 
-	return updated, nil
+	return updated, changed, nil
 }
 
 // newConfigStore resolves the config root and the defaults that depend on the

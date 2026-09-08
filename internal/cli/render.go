@@ -19,7 +19,7 @@ func renderSettings(cmd *cobra.Command, cfg config.Config, prefix string) (strin
 	// Bound to the command's own writer: the package-level lipgloss helpers
 	// read the colour profile from the process's stdout instead, which in a
 	// test writing to a buffer means ANSI from a terminal and none in CI.
-	styles := newStyles(cmd)
+	styles := newPalette(cmd)
 
 	blocks, err := settingBlocks(cfg, prefix)
 	if err != nil {
@@ -53,20 +53,20 @@ type row struct {
 	value string
 }
 
-// styles is the small palette the configuration listing uses.
-type styles struct {
+// palette is the small set of styles the configuration listing uses.
+type palette struct {
 	group lipgloss.Style
 	name  lipgloss.Style
 	value lipgloss.Style
 	empty lipgloss.Style
 }
 
-// newStyles builds a palette against the command's output, so that colour is
+// newPalette builds styles against the command's output, so that colour is
 // decided by where the text is actually going.
-func newStyles(cmd *cobra.Command) styles {
+func newPalette(cmd *cobra.Command) palette {
 	renderer := lipgloss.NewRenderer(cmd.OutOrStdout())
 
-	return styles{
+	return palette{
 		group: renderer.NewStyle().Bold(true),
 		name:  renderer.NewStyle().Faint(true),
 		value: renderer.NewStyle(),
@@ -110,7 +110,7 @@ func settingBlocks(cfg config.Config, prefix string) ([]block, error) {
 
 // renderHeadings writes the group headings that changed since the last block,
 // each indented to its depth. A heading already written is not written again.
-func renderHeadings(s styles, previous, group []string, anythingWritten bool) string {
+func renderHeadings(s palette, previous, group []string, anythingWritten bool) string {
 	var out strings.Builder
 
 	for depth, segment := range group {
@@ -130,7 +130,7 @@ func renderHeadings(s styles, previous, group []string, anythingWritten bool) st
 }
 
 // renderRows writes the settings of one group, aligned, at the given depth.
-func renderRows(s styles, rows []row, depth int) string {
+func renderRows(s palette, rows []row, depth int) string {
 	width := 0
 	for _, r := range rows {
 		width = max(width, lipgloss.Width(r.name))
@@ -150,6 +150,30 @@ func renderRows(s styles, rows []row, depth int) string {
 	}
 
 	return out.String()
+}
+
+// renderChanged lists the settings a change touched, by full path.
+//
+// Deliberately not the grouped listing: that hides settings which do nothing in
+// the current configuration, and the one thing a change must always show is the
+// setting that was just changed. Values are read back from the stored
+// configuration, so what is printed is what was written — an expanded "~", or
+// the default restored by clearing a setting.
+func renderChanged(cmd *cobra.Command, cfg config.Config, settings []string) (string, error) {
+	styles := newPalette(cmd)
+
+	rows := make([]row, 0, len(settings))
+
+	for _, setting := range settings {
+		value, err := cfg.Get(setting)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", setting, err)
+		}
+
+		rows = append(rows, row{name: setting, value: fmt.Sprint(value)})
+	}
+
+	return renderRows(styles, rows, 0), nil
 }
 
 // hiddenSetting reports whether a setting is noise in this configuration.
