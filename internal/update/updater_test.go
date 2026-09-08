@@ -32,14 +32,14 @@ func releaseServer(t *testing.T, tag string, archive []byte) *httptest.Server {
 
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/archive":
+		case "/repos/owner/repo/releases/assets/1":
 			_, _ = w.Write(archive)
-		case "/checksums":
+		case "/repos/owner/repo/releases/assets/2":
 			_, _ = w.Write(checksums)
 		default:
 			_, _ = w.Write([]byte(`[{"tag_name":"` + tag + `","draft":false,"prerelease":false,"assets":[` +
-				`{"name":"` + name + `","browser_download_url":"` + server.URL + `/archive"},` +
-				`{"name":"checksums.txt","browser_download_url":"` + server.URL + `/checksums"}]}]`))
+				`{"id":1,"name":"` + name + `"},` +
+				`{"id":2,"name":"checksums.txt"}]}]`))
 		}
 	}))
 
@@ -48,19 +48,28 @@ func releaseServer(t *testing.T, tag string, archive []byte) *httptest.Server {
 	return server
 }
 
-// newTestUpdater wires an updater against server, a fresh cache, and a clock.
-func newTestUpdater(t *testing.T, server *httptest.Server, current string, now time.Time) *update.Updater {
+// newClientFor builds a client pointed at server.
+func newClientFor(t *testing.T, server *httptest.Server) *update.Client {
 	t.Helper()
 
-	client := update.NewClient(update.ClientOptions{
+	client, err := update.NewClient(update.ClientOptions{
 		HTTPClient: server.Client(),
 		BaseURL:    server.URL,
 		Repo:       "owner/repo",
 		UserAgent:  "cwm-test",
-		Token:      "",
 	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
 
-	return update.NewUpdater(client, cache.New(t.TempDir()), current, fixedClock(now))
+	return client
+}
+
+// newTestUpdater wires an updater against server, a fresh cache, and a clock.
+func newTestUpdater(t *testing.T, server *httptest.Server, current string, now time.Time) *update.Updater {
+	t.Helper()
+
+	return update.NewUpdater(newClientFor(t, server), cache.New(t.TempDir()), current, fixedClock(now))
 }
 
 func TestUpdaterUpdatable(t *testing.T) {
@@ -108,15 +117,7 @@ func TestUpdaterDue(t *testing.T) {
 				t.Fatalf("WriteTime() error = %v", err)
 			}
 
-			client := update.NewClient(update.ClientOptions{
-				HTTPClient: server.Client(),
-				BaseURL:    server.URL,
-				Repo:       "owner/repo",
-				UserAgent:  "cwm-test",
-				Token:      "",
-			})
-
-			updater := update.NewUpdater(client, entries, "1.0.0", fixedClock(now))
+			updater := update.NewUpdater(newClientFor(t, server), entries, "1.0.0", fixedClock(now))
 			if got := updater.Due(); got != tt.want {
 				t.Errorf("Due() = %t, want %t", got, tt.want)
 			}
@@ -145,17 +146,10 @@ func TestUpdaterDueWithAnUnreadableEntry(t *testing.T) {
 	}
 
 	server := releaseServer(t, "v1.2.0", nil)
-	client := update.NewClient(update.ClientOptions{
-		HTTPClient: server.Client(),
-		BaseURL:    server.URL,
-		Repo:       "owner/repo",
-		UserAgent:  "cwm-test",
-		Token:      "",
-	})
 
 	// A cache that cannot be read is a cache that says nothing, and the safe
 	// answer to "have we checked lately" is no.
-	if !update.NewUpdater(client, entries, "1.0.0", fixedClock(now)).Due() {
+	if !update.NewUpdater(newClientFor(t, server), entries, "1.0.0", fixedClock(now)).Due() {
 		t.Error("Due() = false for an unreadable entry, want true")
 	}
 }
@@ -166,14 +160,7 @@ func TestUpdaterMarkChecked(t *testing.T) {
 	now := time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC)
 	entries := cache.New(t.TempDir())
 	server := releaseServer(t, "v1.2.0", nil)
-	client := update.NewClient(update.ClientOptions{
-		HTTPClient: server.Client(),
-		BaseURL:    server.URL,
-		Repo:       "owner/repo",
-		UserAgent:  "cwm-test",
-		Token:      "",
-	})
-	updater := update.NewUpdater(client, entries, "1.0.0", fixedClock(now))
+	updater := update.NewUpdater(newClientFor(t, server), entries, "1.0.0", fixedClock(now))
 
 	if err := updater.MarkChecked(); err != nil {
 		t.Fatalf("MarkChecked() error = %v", err)
@@ -269,18 +256,16 @@ func TestUpdaterApplyRefusesATamperedArchive(t *testing.T) {
 
 	// The listing publishes a digest for one archive and the download serves
 	// another: exactly what an update has to refuse.
-	var server *httptest.Server
-
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/archive":
+		case "/repos/owner/repo/releases/assets/1":
 			_, _ = w.Write(makeArchive(t, entry{name: "cwm", contents: "something else", dir: false}))
-		case "/checksums":
+		case "/repos/owner/repo/releases/assets/2":
 			_, _ = w.Write(checksumsFor(map[string][]byte{name: archive}))
 		default:
 			_, _ = w.Write([]byte(`[{"tag_name":"v1.2.0","draft":false,"prerelease":false,"assets":[` +
-				`{"name":"` + name + `","browser_download_url":"` + server.URL + `/archive"},` +
-				`{"name":"checksums.txt","browser_download_url":"` + server.URL + `/checksums"}]}]`))
+				`{"id":1,"name":"` + name + `"},` +
+				`{"id":2,"name":"checksums.txt"}]}]`))
 		}
 	}))
 
@@ -329,7 +314,7 @@ func TestUpdaterApplyWithoutABuildForThisPlatform(t *testing.T) {
 	release := update.Release{
 		Tag:        "v1.2.0",
 		Prerelease: false,
-		Assets:     []update.Asset{{Name: "checksums.txt", URL: server.URL + "/checksums"}},
+		Assets:     []update.Asset{{Name: "checksums.txt", ID: 2}},
 	}
 
 	target := filepath.Join(t.TempDir(), "cwm")
@@ -350,7 +335,7 @@ func TestUpdaterApplyWithoutPublishedChecksums(t *testing.T) {
 		Tag:        "v1.2.0",
 		Prerelease: false,
 		Assets: []update.Asset{
-			{Name: platformAsset("1.2.0"), URL: server.URL + "/archive"},
+			{Name: platformAsset("1.2.0"), ID: 1},
 		},
 	}
 

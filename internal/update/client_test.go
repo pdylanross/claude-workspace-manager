@@ -16,9 +16,9 @@ import (
 const releasesJSON = `[
   {"tag_name":"v2.0.0","draft":true,"prerelease":false,"assets":[]},
   {"tag_name":"v1.3.0","draft":false,"prerelease":true,
-   "assets":[{"name":"cwm_1.3.0_linux_amd64.tar.gz","browser_download_url":"https://example.test/a"}]},
+   "assets":[{"id":11,"name":"cwm_1.3.0_linux_amd64.tar.gz"}]},
   {"tag_name":"v1.2.0","draft":false,"prerelease":false,
-   "assets":[{"name":"checksums.txt","browser_download_url":"https://example.test/c"}]}
+   "assets":[{"id":12,"name":"checksums.txt"}]}
 ]`
 
 // newTestClient returns a client pointed at a server running handler, along
@@ -29,13 +29,17 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*update.Client, stri
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
-	return update.NewClient(update.ClientOptions{
+	client, err := update.NewClient(update.ClientOptions{
 		HTTPClient: server.Client(),
 		BaseURL:    server.URL,
 		Repo:       "owner/repo",
 		UserAgent:  "cwm-test",
-		Token:      "",
-	}), server.URL
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	return client, server.URL
 }
 
 func TestClientReleases(t *testing.T) {
@@ -75,8 +79,8 @@ func TestClientReleases(t *testing.T) {
 	}
 
 	asset, found := releases[0].Asset("cwm_1.3.0_linux_amd64.tar.gz")
-	if !found || asset.URL != "https://example.test/a" {
-		t.Errorf("Releases()[0] asset = %+v, %t, want the download url", asset, found)
+	if !found || asset.ID != 11 {
+		t.Errorf("Releases()[0] asset = %+v, %t, want the asset id", asset, found)
 	}
 }
 
@@ -110,14 +114,14 @@ func TestClientRefusesAnOversizedResponse(t *testing.T) {
 
 	// The checksums file is capped far below what a real one needs; a response
 	// far above that is a server misbehaving, and cwm stops reading.
-	client, serverURL := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		flood := strings.Repeat("x", 1<<20)
 		for range 4 {
 			_, _ = w.Write([]byte(flood))
 		}
 	})
 
-	_, err := client.Checksums(t.Context(), update.Asset{Name: "checksums.txt", URL: serverURL})
+	_, err := client.Checksums(t.Context(), update.Asset{Name: "checksums.txt", ID: 12})
 	if !errors.Is(err, update.ErrTooLarge) {
 		t.Errorf("Checksums() error = %v, want ErrTooLarge", err)
 	}
@@ -138,92 +142,65 @@ func TestClientHonoursACancelledContext(t *testing.T) {
 	}
 }
 
-func TestClientSendsTheCredential(t *testing.T) {
+func TestClientRejectsAMalformedRepo(t *testing.T) {
 	t.Parallel()
 
-	var authorization string
+	for _, repo := range []string{"", "no-slash", "/name", "owner/"} {
+		t.Run(repo, func(t *testing.T) {
+			t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authorization = r.Header.Get("Authorization")
-
-		_, _ = w.Write([]byte(releasesJSON))
-	}))
-
-	t.Cleanup(server.Close)
-
-	client := update.NewClient(update.ClientOptions{
-		HTTPClient: server.Client(),
-		BaseURL:    server.URL,
-		Repo:       "owner/repo",
-		UserAgent:  "cwm-test",
-		Token:      "a-credential",
-	})
-
-	if _, err := client.Releases(t.Context()); err != nil {
-		t.Fatalf("Releases() error = %v", err)
-	}
-
-	// Without this header a private repository answers 404, and the whole
-	// update mechanism silently believes there is nothing to install.
-	if want := "Bearer a-credential"; authorization != want {
-		t.Errorf("Authorization = %q, want %q", authorization, want)
+			_, err := update.NewClient(update.ClientOptions{
+				HTTPClient: http.DefaultClient,
+				BaseURL:    "",
+				Repo:       repo,
+				UserAgent:  "cwm-test",
+			})
+			if !errors.Is(err, update.ErrInvalidRepo) {
+				t.Errorf("NewClient(%q) error = %v, want ErrInvalidRepo", repo, err)
+			}
+		})
 	}
 }
 
-func TestClientStaysAnonymousWithoutACredential(t *testing.T) {
+func TestClientStaysAnonymous(t *testing.T) {
 	t.Parallel()
 
 	var seen bool
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		_, seen = r.Header["Authorization"]
 
 		_, _ = w.Write([]byte(releasesJSON))
-	}))
-
-	t.Cleanup(server.Close)
-
-	client := update.NewClient(update.ClientOptions{
-		HTTPClient: server.Client(),
-		BaseURL:    server.URL,
-		Repo:       "owner/repo",
-		UserAgent:  "cwm-test",
-		Token:      "",
 	})
 
 	if _, err := client.Releases(t.Context()); err != nil {
 		t.Fatalf("Releases() error = %v", err)
 	}
 
+	// cwm reads public releases; it must not send credentials it was never
+	// given, and must not pick one up from the ambient environment.
 	if seen {
-		t.Error("request carried an Authorization header with no credential configured")
+		t.Error("request carried an Authorization header")
 	}
 }
 
-func TestClientExplainsAMissingRepository(t *testing.T) {
+func TestClientDownloadsAnAsset(t *testing.T) {
 	t.Parallel()
 
-	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "not found", http.StatusNotFound)
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if want := "/repos/owner/repo/releases/assets/12"; r.URL.Path != want {
+			t.Errorf("path = %q, want %q", r.URL.Path, want)
+		}
+
+		_, _ = w.Write([]byte("the checksums"))
 	})
 
-	_, err := client.Releases(t.Context())
-	if !errors.Is(err, update.ErrRequestFailed) {
-		t.Fatalf("Releases() error = %v, want ErrRequestFailed", err)
+	data, err := client.Checksums(t.Context(), update.Asset{Name: "checksums.txt", ID: 12})
+	if err != nil {
+		t.Fatalf("Checksums() error = %v", err)
 	}
 
-	// A private repository is indistinguishable from a missing one from here,
-	// so the error has to name the way out.
-	if !strings.Contains(err.Error(), update.CredentialEnvs()[0]) {
-		t.Errorf("Releases() error = %q, want it to name %q", err, update.CredentialEnvs()[0])
-	}
-}
-
-func TestCredentialEnvsPrefersCwmsOwn(t *testing.T) {
-	t.Parallel()
-
-	envs := update.CredentialEnvs()
-	if len(envs) != 2 || envs[0] != "CWM_GITHUB_TOKEN" || envs[1] != "GITHUB_TOKEN" {
-		t.Errorf("CredentialEnvs() = %v, want cwm's own first", envs)
+	if string(data) != "the checksums" {
+		t.Errorf("Checksums() = %q, want %q", data, "the checksums")
 	}
 }

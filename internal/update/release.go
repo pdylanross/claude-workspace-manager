@@ -41,8 +41,10 @@ type Release struct {
 type Asset struct {
 	// Name is the file name, as in cwm_1.2.3_linux_amd64.tar.gz.
 	Name string
-	// URL is where the file can be downloaded from.
-	URL string
+	// ID is GitHub's identifier for the asset, which is what downloading it
+	// takes. The browser download URL is deliberately not carried: going
+	// through the API keeps every request on one client.
+	ID int64
 }
 
 // IsRelease reports whether version is one this build can compare against a

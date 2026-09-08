@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"runtime"
 	"time"
 
@@ -267,28 +266,17 @@ func newOSUpdater(resolver *paths.Resolver, info version.Info) (Updater, error) 
 		return nil, fmt.Errorf("resolve the cache root: %w", err)
 	}
 
-	client := update.NewClient(update.ClientOptions{
+	client, err := update.NewClient(update.ClientOptions{
 		HTTPClient: &http.Client{Timeout: downloadTimeout},
-		BaseURL:    update.DefaultAPIBaseURL,
+		BaseURL:    "",
 		Repo:       update.DefaultRepo,
 		UserAgent:  userAgent(info),
-		Token:      githubCredential(),
 	})
-
-	return update.NewUpdater(client, cache.New(root), info.Short(), time.Now), nil
-}
-
-// githubCredential returns the credential to read releases with, if the
-// environment offers one. The most specific variable wins, so that a credential
-// meant for cwm need not be the one every other tool is using.
-func githubCredential() string {
-	for _, name := range update.CredentialEnvs() {
-		if value := os.Getenv(name); value != "" {
-			return value
-		}
+	if err != nil {
+		return nil, fmt.Errorf("build the github client: %w", err)
 	}
 
-	return ""
+	return update.NewUpdater(client, cache.New(root), info.Short(), time.Now), nil
 }
 
 // userAgent identifies this cwm to GitHub, which requires one.

@@ -21,10 +21,10 @@ func releaseOf(tag string, prerelease bool) update.Release {
 		Tag:        tag,
 		Prerelease: prerelease,
 		Assets: []update.Asset{
-			{Name: "cwm_" + version + "_linux_amd64.tar.gz", URL: "https://example.test/linux-amd64"},
-			{Name: "cwm_" + version + "_darwin_arm64.tar.gz", URL: "https://example.test/darwin-arm64"},
-			{Name: platformAsset(version), URL: "https://example.test/platform"},
-			{Name: update.ChecksumsAsset, URL: "https://example.test/checksums"},
+			{Name: "cwm_" + version + "_linux_amd64.tar.gz", ID: 1},
+			{Name: "cwm_" + version + "_darwin_arm64.tar.gz", ID: 2},
+			{Name: platformAsset(version), ID: 3},
+			{Name: update.ChecksumsAsset, ID: 4},
 		},
 	}
 }
@@ -221,7 +221,7 @@ func TestPlatformAssetMissing(t *testing.T) {
 	release := update.Release{
 		Tag:        "v1.2.3",
 		Prerelease: false,
-		Assets:     []update.Asset{{Name: "cwm_1.2.3_plan9_mips.tar.gz", URL: "https://example.test/other"}},
+		Assets:     []update.Asset{{Name: "cwm_1.2.3_plan9_mips.tar.gz", ID: 9}},
 	}
 
 	if _, found := release.PlatformAsset(); found {
