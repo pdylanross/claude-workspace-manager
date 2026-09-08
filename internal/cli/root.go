@@ -8,7 +8,12 @@ import (
 )
 
 // newRootCmd assembles the cwm root command and all of its subcommands.
-func newRootCmd(info version.Info, resolver *paths.Resolver, newUpdater updaterFactory) *cobra.Command {
+func newRootCmd(
+	info version.Info,
+	resolver *paths.Resolver,
+	newUpdater updaterFactory,
+	newTool toolFactory,
+) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cwm",
 		Short: "Manage Claude workspaces",
@@ -29,7 +34,12 @@ func newRootCmd(info version.Info, resolver *paths.Resolver, newUpdater updaterF
 		},
 	}
 
-	cmd.AddCommand(newVersionCmd(info), newConfigCmd(resolver), newUpdateCmd(info, resolver, newUpdater))
+	cmd.AddCommand(
+		newVersionCmd(info),
+		newConfigCmd(resolver),
+		newUpdateCmd(info, resolver, newUpdater),
+		newSetupCmd(resolver, newTool),
+	)
 
 	return cmd
 }

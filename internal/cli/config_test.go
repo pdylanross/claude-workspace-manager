@@ -77,7 +77,12 @@ func runCmdWith(t *testing.T, env stubEnv, updater *stubUpdater, input string, a
 
 	var out bytes.Buffer
 
-	cmd := cli.NewRootCmd(version.Info{Version: "1.2.0", Commit: "", Date: ""}, paths.New(env), updater.factory())
+	cmd := cli.NewRootCmd(
+		version.Info{Version: "1.2.0", Commit: "", Date: ""},
+		paths.New(env),
+		updater.factory(),
+		stubToolFactory(),
+	)
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	cmd.SetIn(strings.NewReader(input))

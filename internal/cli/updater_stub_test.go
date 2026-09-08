@@ -2,8 +2,10 @@ package cli_test
 
 import (
 	"context"
+	"errors"
 
 	"github.com/pdylanross/claude-workspace-manager/internal/cli"
+	"github.com/pdylanross/claude-workspace-manager/internal/forge"
 	"github.com/pdylanross/claude-workspace-manager/internal/update"
 	"github.com/pdylanross/claude-workspace-manager/pkg/config"
 )
@@ -67,3 +69,39 @@ func (s *stubUpdater) factory() cli.UpdaterFactory {
 func stubUpdaterFactory() cli.UpdaterFactory {
 	return (&stubUpdater{updatable: false, due: false}).factory()
 }
+
+// stubToolFactory hands out a forge client probe that reports nothing
+// installed, so no test needs gh or glab present.
+func stubToolFactory() cli.ToolFactory {
+	return readyToolFactory(false, "")
+}
+
+// readyToolFactory hands out a probe that reports a client which is installed
+// and logged in as account, or one that is not installed at all.
+func readyToolFactory(ready bool, account string) cli.ToolFactory {
+	return func(kind config.ForgeKind) (*forge.Tool, error) {
+		return forge.New(kind, forge.Options{
+			LookPath: func(command string) (string, error) {
+				if !ready {
+					return "", errNoForgeClient
+				}
+
+				return "/usr/bin/" + command, nil
+			},
+			Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				if !ready {
+					return nil, errNoForgeClient
+				}
+
+				if len(args) > 0 && args[0] == "auth" {
+					return []byte("  Token scopes: 'repo', 'read:org'\n"), nil
+				}
+
+				return []byte(account + "\n"), nil
+			},
+		})
+	}
+}
+
+// errNoForgeClient is what the fake reports when nothing is installed.
+var errNoForgeClient = errors.New("no forge client in tests")
