@@ -247,46 +247,85 @@ func hasOption(field reflect.StructField, option string) bool {
 	return slices.Contains(strings.Split(field.Tag.Get(cwmTag), ","), option)
 }
 
-// eachPathSetting calls fn for every path setting in cfg, which must be a
-// pointer so that fn can change what it is given.
-func eachPathSetting(cfg *Config, fn func(name string, setting *string) error) error {
-	return walkPathSettings(reflect.ValueOf(cfg).Elem(), "", fn)
+// Enum is implemented by a setting whose value must be one of a fixed set.
+//
+// Values is used both to reject a bad assignment and to list the alternatives
+// in the error, so a user who guesses wrong is told what to write instead.
+type Enum interface {
+	Values() []string
 }
 
-// walkPathSettings descends v, calling fn for each field tagged as a path.
-func walkPathSettings(v reflect.Value, prefix string, fn func(name string, setting *string) error) error {
+// setting is what a walk hands to its callback: where the field is, the field
+// itself, and its declaration for the tags.
+type setting func(path string, field reflect.Value, declared reflect.StructField) error
+
+// eachSetting calls fn for every leaf setting in cfg, which must be a pointer
+// so that fn can change what it is given.
+func eachSetting(cfg *Config, fn setting) error {
+	return walkSettings(reflect.ValueOf(cfg).Elem(), "", fn)
+}
+
+// walkSettings descends v, calling fn for each leaf that is part of the
+// document. Fields cwm keeps for itself are walked too: they are not settings,
+// but they are still validated.
+func walkSettings(v reflect.Value, prefix string, fn setting) error {
 	t := v.Type()
 
 	for i := range t.NumField() {
-		field := t.Field(i)
+		declared := t.Field(i)
 
-		name := jsonName(field)
+		name := jsonName(declared)
 		if name == "" {
 			continue
 		}
 
 		path := joinPath(prefix, name)
 
-		if field.Type.Kind() == reflect.Struct {
-			if err := walkPathSettings(v.Field(i), path, fn); err != nil {
+		if declared.Type.Kind() == reflect.Struct {
+			if err := walkSettings(v.Field(i), path, fn); err != nil {
 				return err
 			}
 
 			continue
 		}
 
-		if !hasOption(field, optionPath) || field.Type.Kind() != reflect.String {
-			continue
-		}
-
-		setting, ok := reflect.TypeAssert[*string](v.Field(i).Addr())
-		if !ok {
-			continue
-		}
-
-		if err := fn(path, setting); err != nil {
+		if err := fn(path, v.Field(i), declared); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// enumValues returns the values field accepts, when it is an [Enum].
+func enumValues(field reflect.Value) ([]string, bool) {
+	enum, ok := reflect.TypeAssert[Enum](field)
+	if !ok {
+		return nil, false
+	}
+
+	return enum.Values(), true
+}
+
+// validateEnum reports whether value is one of allowed.
+func validateEnum(name, value string, allowed []string) error {
+	if slices.Contains(allowed, value) {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"%w: %s is %q, but must be one of: %s", ErrInvalidSetting, name, value, strings.Join(allowed, ", "),
+	)
+}
+
+// validatePath reports whether value is usable as a filesystem path.
+func validatePath(name, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%w: %s is empty", ErrInvalidSetting, name)
+	}
+
+	if !filepath.IsAbs(value) {
+		return fmt.Errorf("%w: %s must be an absolute path, but is %q", ErrInvalidSetting, name, value)
 	}
 
 	return nil
@@ -319,6 +358,10 @@ func expandHome(value, homeDir string) string {
 func assignField(field reflect.Value, value string) error {
 	switch {
 	case field.Kind() == reflect.String:
+		if allowed, isEnum := enumValues(field); isEnum && !slices.Contains(allowed, value) {
+			return fmt.Errorf("%q is not one of: %s", value, strings.Join(allowed, ", "))
+		}
+
 		field.SetString(value)
 	case field.Kind() == reflect.Bool:
 		parsed, err := strconv.ParseBool(value)
