@@ -357,6 +357,14 @@ Every push to main, after lint/test/build pass, cuts a prerelease `vX.Y.Z-preN`.
 `promote` job turns the newest one into `vX.Y.Z` once a reviewer approves it. A push that cuts no
 prerelease queues no approval: the job's `if` is evaluated before the environment gate.
 
+**Concurrency belongs on the release jobs, never on the workflow.** A job parked on an approval
+counts as in progress, so a workflow-level group would hold up lint and test for every later push
+until somebody dealt with the approval. The two release jobs want opposite settings: cutting is
+serialised and never cancelled (`cancel-in-progress: false`) because a half-written release is worse
+than a slow queue, while promotion *is* cancelled by the next one (`cancel-in-progress: true`) so a
+newer prerelease withdraws the older one's approval request. Approving is then always approving the
+newest thing on main, and stale requests never pile up.
+
 **The prerelease counter is scoped to the target version, not to the timeline.** When a `feat:`
 arrives after `1.0.2-pre1` has been cut, the target moves to `1.1.0`, whose counter has never been
 used, so the next cut is `1.1.0-pre1` and `1.0.2-pre1` is simply left behind. Abandoned tags are
