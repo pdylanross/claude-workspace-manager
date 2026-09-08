@@ -225,6 +225,10 @@ is larger than what is recallable accurately.
 | `github.com/spf13/cobra` | v1.10.2 | `references/cobra.md` | CLI framework: commands, flags, args validation, lifecycle hooks, completions, testing |
 | `golang.org/x/mod/semver` | v0.40.0 | `references/semver.md` | Semantic version comparison for the updater |
 | `github.com/google/go-github/v76` | v76.0.0 | `references/go-github.md` | GitHub REST API: releases today, more as cwm grows |
+| `github.com/charmbracelet/fang` | v1.0.0 | `references/charm.md` | Styled cobra help, usage, errors, `--version` |
+| `github.com/charmbracelet/huh` | v1.0.0 | `references/charm.md` | Prompts, confirmations, forms |
+| `github.com/charmbracelet/lipgloss` | v1.1.0 | `references/charm.md` | Colour and layout for printed output |
+| `github.com/charmbracelet/bubbletea` | v1.3.6 | `references/charm.md` | TUI runtime; used through huh, direct use is a last resort |
 
 Not yet referenced (add on first non-trivial use): git operations, structured logging, TUI.
 
@@ -271,7 +275,42 @@ Do this in the same change that adds the dependency, not later.
 6. **Update on upgrade.** When a dependency's version changes in `go.mod`, re-check its reference: at
    minimum re-run step 2 and diff the API surface. Update the pinned version line either way.
 
-## 6. Pull requests
+## 6. Terminal output
+
+**Everything a user reads goes through the Charm libraries.** No hand-rolled ANSI, no ad-hoc
+alignment, no `fmt.Println` for anything that is not machine-readable. Details and the API
+surface are in `references/charm.md`; the rules are here.
+
+| Want | Use |
+|---|---|
+| Styled help, usage, errors, `--version` | `fang.Execute` in `cli.Execute` |
+| A prompt or confirmation | `huh`, never `bufio` on stdin |
+| Colour or alignment on output | `lipgloss`, from a renderer bound to the writer |
+| A long-running interactive view | `bubbletea`, but try `huh` first |
+
+### Rules
+
+- **`internal/cli` is the only package that may import them.** Everything below returns data and
+  errors. A package that knows what a terminal is cannot be tested as a library or reused by
+  anything that is not a terminal.
+- **Every prompt has a flag.** Nothing may be reachable only by answering a question: a command
+  that cannot be driven non-interactively cannot be scripted, run in CI, or tested without
+  simulating a human. The flag is the interface; the prompt is a convenience for someone who did
+  not pass it.
+- **Prompt only with a TTY on both stdin and stdout.** Check with `term.IsTerminal`, and when
+  there is no terminal, fail with the flag to pass instead — do not silently pick a default for
+  something the user was going to be asked about.
+- **Never style machine-readable output.** `cwm config show` gets piped into `jq`. Colour codes
+  belong on prose, prompts, help and errors, and nowhere near a document or a value a script
+  reads.
+- **Bind styles to the writer**, with `lipgloss.NewRenderer(cmd.OutOrStdout())`. The package-level
+  style helpers detect colour from the *process's* stdout, so a test capturing a buffer gets ANSI
+  when run from a terminal and none in CI. That is a suite that passes on one machine and fails
+  on another, and it is the single easiest mistake to make here.
+- **Commands still write through `cmd.OutOrStdout()` / `cmd.ErrOrStderr()`.** §3.2 is unchanged.
+  These libraries change what is written, not where.
+
+## 7. Pull requests
 
 Derived from PR #1 (`feat: scaffold cwm project structure and version command`) and PR #2
 (`feat: add the config subsystem and cwm config commands`). Read the most recent merged PR before
@@ -287,7 +326,7 @@ ignores it.
 
 - **Only markdown changed** — `docs/`, `*.md`, `.claude/skills/**`. One Go file in the diff and
   it is a PR.
-- **The commit is typed `docs:`** — which is what makes it release-neutral. Per §7, `docs:` earns
+- **The commit is typed `docs:`** — which is what makes it release-neutral. Per §8, `docs:` earns
   no bump, so nothing is tagged and no approval is queued.
 
 The failure mode when the two disagree is quiet in both directions, which is the reason to state
@@ -353,7 +392,7 @@ The PR body is written *from* the commit bodies, condensed — so write each com
 were going to be read by a reviewer, because it is. Same rules: subject in conventional-commit
 form, body in prose explaining why, `--` for em dashes, and the harness attribution trailers last.
 
-## 7. Release pipeline
+## 8. Release pipeline
 
 Versions are derived from commit messages, not chosen by hand. `internal/release` holds the rules
 (pure, tested against the worked example in `plan_test.go`); `cmd/release` reads git and prints

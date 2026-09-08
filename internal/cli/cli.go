@@ -5,7 +5,10 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+
+	"github.com/charmbracelet/fang"
 
 	"github.com/pdylanross/claude-workspace-manager/internal/paths"
 	"github.com/pdylanross/claude-workspace-manager/pkg/version"
@@ -20,7 +23,15 @@ func Execute(info version.Info) error {
 
 	newUpdater := func() (Updater, error) { return newOSUpdater(resolver, info) }
 
-	if err := newRootCmd(info, resolver, newUpdater).Execute(); err != nil {
+	// fang styles help, usage, errors and --version, and owns the version flag,
+	// which is why newRootCmd leaves cobra's Version field alone.
+	err := fang.Execute(
+		context.Background(),
+		newRootCmd(info, resolver, newUpdater),
+		fang.WithVersion(info.Short()),
+		fang.WithCommit(info.Commit),
+	)
+	if err != nil {
 		return fmt.Errorf("execute cwm: %w", err)
 	}
 
