@@ -388,6 +388,14 @@ normal and are never cleaned up.
 - **Promotion tags the prerelease's commit, not HEAD.** main moves while approval waits; releasing
   HEAD would ship code that was never in the prerelease. The workflow checks the tag out detached
   before goreleaser runs.
+- **Always pass `GORELEASER_CURRENT_TAG`.** A promotion leaves two tags on one commit, and asked to
+  work out which it is on, goreleaser sorts them with git's version sort — which knows nothing about
+  semver prereleases and ranks `v0.1.0-pre1` *above* `v0.1.0`. It then re-releases the prerelease it
+  was promoting, fails on `422 already_exists` uploading assets that are already there, and leaves a
+  release tag with no release behind it. `git describe --tags --abbrev=0` answers correctly on the
+  same commit, so this is not visible from a quick check; naming the tag outright is the only
+  reliable fix. (`git config versionsort.suffix -pre` would fix the sort, but it depends on how
+  goreleaser looks the tag up, which is not ours to rely on.)
 - **CI runs goreleaser itself** rather than relying on `release.yml`. A tag pushed with
   `GITHUB_TOKEN` does not trigger another workflow — GitHub's loop protection — so a tag-triggered
   release would silently never fire. `release.yml` remains for tags pushed by hand.

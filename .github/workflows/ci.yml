@@ -101,6 +101,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Say which tag outright rather than letting goreleaser work it out.
+          # See the promote job for what happens when it works it out wrongly.
+          GORELEASER_CURRENT_TAG: ${{ steps.plan.outputs.tag }}
 
   # Gated on the "release" environment, which carries the required reviewer.
   # The job's "if" is evaluated before the gate, so a push that cut no
@@ -157,3 +160,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Load bearing. A promotion puts two tags on one commit, and asked to
+          # work out which it is on, goreleaser picks the prerelease: it sorts
+          # the tags with git's version sort, which knows nothing about semver
+          # prereleases and so ranks v0.1.0-pre1 above v0.1.0. The result is a
+          # promotion that quietly re-releases the prerelease it was promoting.
+          GORELEASER_CURRENT_TAG: ${{ steps.promote.outputs.tag }}
