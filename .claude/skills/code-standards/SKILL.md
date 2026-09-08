@@ -277,6 +277,28 @@ Derived from PR #1 (`feat: scaffold cwm project structure and version command`) 
 (`feat: add the config subsystem and cwm config commands`). Read the most recent merged PR before
 writing a new one; this section is the pattern, not a replacement for looking.
 
+### When a pull request is not needed
+
+**Documentation goes straight to main.** A design document, or a fix to this skill, gains nothing
+from a branch and a PR when the author is the only reviewer, and the release pipeline already
+ignores it.
+
+"Documentation" means both halves of that, and they have to agree:
+
+- **Only markdown changed** — `docs/`, `*.md`, `.claude/skills/**`. One Go file in the diff and
+  it is a PR.
+- **The commit is typed `docs:`** — which is what makes it release-neutral. Per §7, `docs:` earns
+  no bump, so nothing is tagged and no approval is queued.
+
+The failure mode when the two disagree is quiet in both directions, which is the reason to state
+it:
+
+- `feat:` on a markdown-only commit **cuts a release** for a documentation change.
+- `docs:` on a commit carrying code ships that code **with no version bump** — invisible to the
+  pipeline, and to everyone whose cwm is deciding whether to update.
+
+CI still runs on every push to main, so lint, tests and build are not skipped. Only the review is.
+
 ### Mechanics
 
 ```sh
