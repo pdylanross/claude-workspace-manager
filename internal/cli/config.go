@@ -228,7 +228,12 @@ func newConfigResetCmd(resolver *paths.Resolver) *cobra.Command {
 				return fmt.Errorf("reset the configuration: %w", err)
 			}
 
-			return writeConfig(cmd, cfg)
+			listing, err := renderSettings(cmd, cfg, "")
+			if err != nil {
+				return err
+			}
+
+			return writeOut(cmd, []byte(listing))
 		},
 	}
 

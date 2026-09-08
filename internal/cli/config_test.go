@@ -510,6 +510,15 @@ func TestConfigResetDiscardsTheDocument(t *testing.T) {
 	if got := readDocument(t, env); got != string(want) {
 		t.Errorf("document on disk = %q, want the defaults %q", got, want)
 	}
+
+	// Formatted for reading, like show, rather than the document.
+	if strings.Contains(out, "{") {
+		t.Errorf("output looks like JSON, want a formatted listing, got:\n%s", out)
+	}
+
+	if !strings.Contains(out, "workspaceRoot") {
+		t.Errorf("output missing the settings, got:\n%s", out)
+	}
 }
 
 func TestConfigResetRescuesABrokenDocument(t *testing.T) {
@@ -727,5 +736,45 @@ func TestConfigResetRefusesWithoutATerminal(t *testing.T) {
 
 	if got := readDocument(t, env); got != existing {
 		t.Errorf("document on disk = %q, want it untouched as %q", got, existing)
+	}
+}
+
+func TestConfigShowOmitsTheForgeKindOnceChosen(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+
+	if _, err := runCmd(t, env, "", "config", "set", "forge.kind=github"); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	out, err := runCmd(t, env, "", "config", "show")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// The group heading already names the forge; "kind github" above a
+	// "github" heading says it twice.
+	if strings.Contains(out, "kind") {
+		t.Errorf("output still shows the forge kind, got:\n%s", out)
+	}
+
+	if !strings.Contains(out, "\n  github\n") {
+		t.Errorf("output missing the forge group, got:\n%s", out)
+	}
+}
+
+func TestConfigShowKeepsTheForgeKindWhenUnconfigured(t *testing.T) {
+	t.Parallel()
+
+	_, out, err := runConfigCmd(t, "config", "show")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// Without it the forge group would be empty, and that nothing is set up is
+	// the one thing worth knowing there.
+	if !strings.Contains(out, "none") {
+		t.Errorf("output does not say the forge is unconfigured, got:\n%s", out)
 	}
 }

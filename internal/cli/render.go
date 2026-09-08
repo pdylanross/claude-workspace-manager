@@ -161,9 +161,19 @@ func renderRows(s styles, rows []row, depth int) string {
 // really is.
 func hiddenSetting(setting string, cfg config.Config) bool {
 	const (
+		forgeKind      = "forge.kind"
 		githubSettings = "forge.github."
 		gitlabSettings = "forge.gitlab."
 	)
+
+	// Once a forge is chosen, the group heading under forge already names it,
+	// and "kind github" above a "github" heading says the same thing twice. An
+	// unconfigured cwm keeps it, because otherwise the forge group would be
+	// empty and the one thing worth knowing — that nothing is set up — would
+	// be the thing left out.
+	if setting == forgeKind {
+		return cfg.Forge.Configured()
+	}
 
 	switch cfg.Forge.Kind {
 	case config.ForgeGitHub:
