@@ -1,12 +1,14 @@
 package cli
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
-	"io"
+	"os"
+	"reflect"
 	"strings"
 
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
 	"github.com/pdylanross/claude-workspace-manager/internal/paths"
@@ -38,16 +40,21 @@ func newConfigCmd(resolver *paths.Resolver) *cobra.Command {
 
 // newConfigShowCmd builds the "cwm config show" command.
 func newConfigShowCmd(resolver *paths.Resolver) *cobra.Command {
+	var asJSON bool
+
 	cmd := &cobra.Command{
 		Use:   "show [SETTING]",
 		Short: "Print the cwm configuration",
-		Long: "Print the cwm configuration document as JSON.\n\n" +
+		Long: "Print the cwm configuration.\n\n" +
+			"Settings that do nothing in the current configuration are left out: a cwm set\n" +
+			"up against GitHub is not shown its GitLab settings. Use --json for the document\n" +
+			"exactly as it is on disk, which is what a script should read.\n\n" +
 			"Given a setting, print only that setting's value, unquoted so that a shell can\n" +
-			"use it directly. Given the name of a group of settings, print that group as a\n" +
-			"JSON object.\n\n" +
+			"use it directly.\n\n" +
 			"If no document exists yet, one is written with cwm's defaults first, so the\n" +
 			"output always matches what is on disk.",
 		Example: "  cwm config show\n" +
+			"  cwm config show --json\n" +
 			"  cwm config show workspaceRoot",
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeSettings,
@@ -62,25 +69,77 @@ func newConfigShowCmd(resolver *paths.Resolver) *cobra.Command {
 				return fmt.Errorf("load the configuration: %w", err)
 			}
 
-			if len(args) == 0 {
-				return writeConfig(cmd, cfg)
+			if asJSON {
+				return showJSON(cmd, cfg, args)
 			}
 
-			value, err := cfg.Get(args[0])
-			if err != nil {
-				return fmt.Errorf("show %s: %w", args[0], err)
-			}
-
-			data, err := config.Render(value)
-			if err != nil {
-				return fmt.Errorf("render %s: %w", args[0], err)
-			}
-
-			return writeOut(cmd, data)
+			return showSettings(cmd, cfg, args)
 		},
 	}
 
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the document as it is on disk")
+
 	return cmd
+}
+
+// showSettings prints the configuration for a person to read.
+func showSettings(cmd *cobra.Command, cfg config.Config, args []string) error {
+	prefix := ""
+
+	if len(args) > 0 {
+		prefix = args[0]
+
+		// Addressing it first is what keeps the error worth reading: an
+		// unknown setting is reported by the layer that knows what the known
+		// ones are.
+		value, err := cfg.Get(prefix)
+		if err != nil {
+			return fmt.Errorf("show %s: %w", prefix, err)
+		}
+
+		// A single setting stays bare and unstyled however it is asked for:
+		// "$(cwm config show workspaceRoot)" is the point of it.
+		if !isGroup(value) {
+			data, renderErr := config.Render(value)
+			if renderErr != nil {
+				return fmt.Errorf("render %s: %w", prefix, renderErr)
+			}
+
+			return writeOut(cmd, data)
+		}
+	}
+
+	listing, err := renderSettings(cmd, cfg, prefix)
+	if err != nil {
+		return err
+	}
+
+	return writeOut(cmd, []byte(listing))
+}
+
+// showJSON prints the document, or one value from it, as JSON.
+func showJSON(cmd *cobra.Command, cfg config.Config, args []string) error {
+	if len(args) == 0 {
+		return writeConfig(cmd, cfg)
+	}
+
+	value, err := cfg.Get(args[0])
+	if err != nil {
+		return fmt.Errorf("show %s: %w", args[0], err)
+	}
+
+	data, err := config.Render(value)
+	if err != nil {
+		return fmt.Errorf("render %s: %w", args[0], err)
+	}
+
+	return writeOut(cmd, data)
+}
+
+// isGroup reports whether an addressed value is a group of settings rather than
+// one setting.
+func isGroup(value any) bool {
+	return reflect.ValueOf(value).Kind() == reflect.Struct
 }
 
 // newConfigSetCmd builds the "cwm config set" command.
@@ -154,7 +213,7 @@ func newConfigResetCmd(resolver *paths.Resolver) *cobra.Command {
 			}
 
 			if !assumeYes {
-				confirmed, confirmErr := confirm(cmd, "Discard "+store.Path()+" and take the defaults?")
+				confirmed, confirmErr := confirm(cmd, "Discard "+store.Path()+" and take the defaults?", "--yes")
 				if confirmErr != nil {
 					return confirmErr
 				}
@@ -294,28 +353,51 @@ func writeOut(cmd *cobra.Command, data []byte) error {
 	return nil
 }
 
-// confirm puts question to the user and reads the answer from the command's
-// input.
+// errNotATerminal is returned when something that has to be confirmed is run
+// without anybody there to confirm it.
+var errNotATerminal = errors.New("not a terminal")
+
+// confirm puts question to the user and waits for an answer.
 //
-// Anything but "y" or "yes" is a no, including an empty answer and an input
-// that is already at EOF, so a non-interactive run declines rather than
-// destroying something unattended.
-func confirm(cmd *cobra.Command, question string) (bool, error) {
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s [y/N]: ", question); err != nil {
-		return false, fmt.Errorf("write the confirmation prompt: %w", err)
+// It requires a terminal. Reading a "y" from a pipe would mean a destructive
+// command could be confirmed by a script that never meant to, so a run with no
+// terminal is refused and told which flag says yes in advance. That flag is the
+// non-interactive interface; the prompt is for people.
+func confirm(cmd *cobra.Command, question, flag string) (bool, error) {
+	if !isInteractive(cmd) {
+		return false, fmt.Errorf("%w: pass %s to confirm", errNotATerminal, flag)
 	}
 
-	answer, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("read the confirmation: %w", err)
+	confirmed := false
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().Title(question).Affirmative("Yes").Negative("No").Value(&confirmed),
+		),
+	).WithInput(cmd.InOrStdin()).WithOutput(cmd.OutOrStdout())
+
+	if err := form.RunWithContext(cmd.Context()); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("ask for confirmation: %w", err)
 	}
 
-	switch strings.ToLower(strings.TrimSpace(answer)) {
-	case "y", "yes":
-		return true, nil
-	default:
-		return false, nil
+	return confirmed, nil
+}
+
+// isInteractive reports whether there is a person on the other end of both
+// streams a prompt needs.
+func isInteractive(cmd *cobra.Command) bool {
+	in, ok := cmd.InOrStdin().(*os.File)
+	if !ok || !term.IsTerminal(in.Fd()) {
+		return false
 	}
+
+	out, ok := cmd.OutOrStdout().(*os.File)
+
+	return ok && term.IsTerminal(out.Fd())
 }
 
 // renderPaths lays the reported locations out as aligned "key: value" lines,

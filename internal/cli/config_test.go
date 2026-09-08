@@ -130,17 +130,13 @@ func TestConfigShowCreatesTheDefaultDocument(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
+	if !strings.Contains(out, filepath.Join(env.homeDir, config.WorkspaceDirName)) {
+		t.Errorf("output missing the default workspace root, got:\n%s", out)
+	}
+
 	want, encErr := defaultsFor(env).Encode()
 	if encErr != nil {
 		t.Fatalf("Encode() error = %v", encErr)
-	}
-
-	if out != string(want) {
-		t.Errorf("output = %q, want %q", out, want)
-	}
-
-	if !strings.Contains(out, filepath.Join(env.homeDir, config.WorkspaceDirName)) {
-		t.Errorf("output missing the default workspace root, got:\n%s", out)
 	}
 
 	data, readErr := os.ReadFile(filepath.Join(env.configRoot, config.FileName))
@@ -355,111 +351,6 @@ func TestConfigSetNeedsAnArgument(t *testing.T) {
 	}
 }
 
-func TestConfigResetDiscardsTheDocument(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input string
-		args  []string
-	}{
-		{"confirmed with y", "y\n", []string{"config", "reset"}},
-		{"confirmed with yes", "YES\n", []string{"config", "reset"}},
-		{"confirmation skipped with --yes", "", []string{"config", "reset", "--yes"}},
-		{"confirmation skipped with -y", "", []string{"config", "reset", "-y"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			env := newStubEnv(t)
-			writeDocument(t, env, document("/srv/workspaces"))
-
-			out, err := runCmd(t, env, tt.input, tt.args...)
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
-
-			if strings.Contains(out, "/srv/workspaces") {
-				t.Errorf("output still shows the discarded workspace root, got:\n%s", out)
-			}
-
-			want, encErr := defaultsFor(env).Encode()
-			if encErr != nil {
-				t.Fatalf("Encode() error = %v", encErr)
-			}
-
-			data, readErr := os.ReadFile(filepath.Join(env.configRoot, config.FileName))
-			if readErr != nil {
-				t.Fatalf("os.ReadFile() error = %v", readErr)
-			}
-
-			if string(data) != string(want) {
-				t.Errorf("document on disk = %q, want the defaults %q", data, want)
-			}
-		})
-	}
-}
-
-func TestConfigResetDeclined(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input string
-	}{
-		{"answered no", "n\n"},
-		{"answered with an empty line", "\n"},
-		{"answered with something else", "maybe\n"},
-		{"nothing on the input at all", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			env := newStubEnv(t)
-			existing := document("/srv/workspaces")
-			writeDocument(t, env, existing)
-
-			out, err := runCmd(t, env, tt.input, "config", "reset")
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
-
-			if !strings.Contains(out, "nothing was written") {
-				t.Errorf("output missing the cancellation notice, got:\n%s", out)
-			}
-
-			data, readErr := os.ReadFile(filepath.Join(env.configRoot, config.FileName))
-			if readErr != nil {
-				t.Fatalf("os.ReadFile() error = %v", readErr)
-			}
-
-			if string(data) != existing {
-				t.Errorf("document on disk = %q, want it untouched as %q", data, existing)
-			}
-		})
-	}
-}
-
-func TestConfigResetAsksBeforeWriting(t *testing.T) {
-	t.Parallel()
-
-	env := newStubEnv(t)
-
-	out, err := runCmd(t, env, "y\n", "config", "reset")
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-
-	path := filepath.Join(env.configRoot, config.FileName)
-	if !strings.Contains(out, path) {
-		t.Errorf("prompt does not name %q, got:\n%s", path, out)
-	}
-}
-
 func TestConfigGroupPrintsHelp(t *testing.T) {
 	t.Parallel()
 
@@ -591,6 +482,31 @@ func TestConfigShowRejectsADocumentFromANewerCwm(t *testing.T) {
 	}
 }
 
+func TestConfigResetDiscardsTheDocument(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+	writeDocument(t, env, document("/srv/workspaces"))
+
+	out, err := runCmd(t, env, "", "config", "reset", "--yes")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if strings.Contains(out, "/srv/workspaces") {
+		t.Errorf("output still shows the discarded workspace root, got:\n%s", out)
+	}
+
+	want, encErr := defaultsFor(env).Encode()
+	if encErr != nil {
+		t.Fatalf("Encode() error = %v", encErr)
+	}
+
+	if got := readDocument(t, env); got != string(want) {
+		t.Errorf("document on disk = %q, want the defaults %q", got, want)
+	}
+}
+
 func TestConfigResetRescuesABrokenDocument(t *testing.T) {
 	t.Parallel()
 
@@ -627,7 +543,7 @@ func TestConfigShowRejectsSchemaVersionAsASetting(t *testing.T) {
 func TestConfigShowIncludesTheSchemaVersion(t *testing.T) {
 	t.Parallel()
 
-	_, out, err := runConfigCmd(t, "config", "show")
+	_, out, err := runConfigCmd(t, "config", "show", "--json")
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -635,5 +551,176 @@ func TestConfigShowIncludesTheSchemaVersion(t *testing.T) {
 	// Not addressable, but still visible in the document it belongs to.
 	if !strings.Contains(out, `"schemaVersion"`) {
 		t.Errorf("output missing the schema version, got:\n%s", out)
+	}
+}
+
+func TestConfigShowIsFormattedByDefault(t *testing.T) {
+	t.Parallel()
+
+	_, out, err := runConfigCmd(t, "config", "show")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// Formatted for reading, not the document.
+	if strings.Contains(out, "{") || strings.Contains(out, `"workspaceRoot"`) {
+		t.Errorf("output looks like JSON, want a formatted listing, got:\n%s", out)
+	}
+
+	for _, want := range []string{"workspaceRoot", "update", "mode", "auto", "forge", "kind", "none"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestConfigShowIsNotStyledWhenPipedIntoABuffer(t *testing.T) {
+	t.Parallel()
+
+	_, out, err := runConfigCmd(t, "config", "show")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// Styles are built from a renderer bound to the command's writer, so this
+	// holds whether or not the test itself is run from a terminal.
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("output carries ANSI escapes, got:\n%q", out)
+	}
+}
+
+func TestConfigShowHidesTheOtherForge(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		kind    string
+		shown   string
+		hidden  string
+		visible string
+	}{
+		{"github hides gitlab", "github", "github", "gitlab", "forge.github.space"},
+		{"gitlab hides github", "gitlab", "gitlab", "github", "forge.gitlab.space"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := newStubEnv(t)
+
+			if _, err := runCmd(t, env, "", "config", "set", "forge.kind="+tt.kind); err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+
+			out, err := runCmd(t, env, "", "config", "show")
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+
+			// The heading line, not the bare word: a temporary directory path
+			// can easily contain "github" and say nothing about the listing.
+			if !strings.Contains(out, "\n  "+tt.shown+"\n") {
+				t.Errorf("output missing the %q group, got:\n%s", tt.shown, out)
+			}
+
+			if strings.Contains(out, "\n  "+tt.hidden+"\n") {
+				t.Errorf("output shows the %q group, which does nothing here:\n%s", tt.hidden, out)
+			}
+
+			// The document still holds both; only the listing is filtered.
+			raw, err := runCmd(t, env, "", "config", "show", "--json")
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+
+			if !strings.Contains(raw, `"`+tt.hidden+`"`) {
+				t.Errorf("--json is missing %q, want the document as it is on disk:\n%s", tt.hidden, raw)
+			}
+		})
+	}
+}
+
+func TestConfigShowHidesBothForgesUntilOneIsChosen(t *testing.T) {
+	t.Parallel()
+
+	_, out, err := runConfigCmd(t, "config", "show")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	for _, hidden := range []string{"github", "gitlab"} {
+		if strings.Contains(out, "\n  "+hidden+"\n") {
+			t.Errorf("output shows the %q group before a forge is chosen, got:\n%s", hidden, out)
+		}
+	}
+}
+
+func TestEverySettingIsVisibleUnderSomeForge(t *testing.T) {
+	t.Parallel()
+
+	// A guard against a setting that is hidden in every configuration, which
+	// is how a new setting would silently never appear. The union of what is
+	// shown across the forge kinds has to be everything.
+	seen := map[string]bool{}
+
+	for _, kind := range []string{"none", "github", "gitlab"} {
+		env := newStubEnv(t)
+
+		if _, err := runCmd(t, env, "", "config", "set", "forge.kind="+kind); err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+
+		out, err := runCmd(t, env, "", "config", "show")
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+
+		for _, setting := range config.Settings() {
+			_, leaf := lastSegment(setting)
+			if strings.Contains(out, leaf) {
+				seen[setting] = true
+			}
+		}
+	}
+
+	for _, setting := range config.Settings() {
+		if !seen[setting] {
+			t.Errorf("setting %q is never shown under any forge kind", setting)
+		}
+	}
+}
+
+// lastSegment returns a setting's final path segment, which is what the
+// listing prints.
+func lastSegment(setting string) (string, string) {
+	index := strings.LastIndex(setting, ".")
+	if index < 0 {
+		return "", setting
+	}
+
+	return setting[:index], setting[index+1:]
+}
+
+func TestConfigResetRefusesWithoutATerminal(t *testing.T) {
+	t.Parallel()
+
+	env := newStubEnv(t)
+	existing := document("/srv/workspaces")
+	writeDocument(t, env, existing)
+
+	// A "y" piped from a script is not a person confirming, and this is the
+	// most destructive thing the config commands do.
+	out, err := runCmd(t, env, "y\n", "config", "reset")
+	if err == nil {
+		t.Fatal("Execute() error = nil, want a refusal without a terminal")
+	}
+
+	if !strings.Contains(out, "--yes") {
+		t.Errorf("error does not say how to confirm, got:\n%s", out)
+	}
+
+	if got := readDocument(t, env); got != existing {
+		t.Errorf("document on disk = %q, want it untouched as %q", got, existing)
 	}
 }

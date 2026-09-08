@@ -62,6 +62,16 @@ func TestConfigEncode(t *testing.T) {
 		"  \"update\": {\n" +
 		"    \"mode\": \"auto\",\n" +
 		"    \"channel\": \"stable\"\n" +
+		"  },\n" +
+		"  \"forge\": {\n" +
+		"    \"kind\": \"none\",\n" +
+		"    \"github\": {\n" +
+		"      \"space\": \"\"\n" +
+		"    },\n" +
+		"    \"gitlab\": {\n" +
+		"      \"host\": \"\",\n" +
+		"      \"space\": \"\"\n" +
+		"    }\n" +
 		"  }\n" +
 		"}\n"
 	if string(data) != want {
@@ -503,5 +513,75 @@ func TestEnumValuesAreListedInOrder(t *testing.T) {
 
 	if got := config.ChannelStable.Values(); !slices.Equal(got, []string{"stable", "prerelease"}) {
 		t.Errorf("Channel.Values() = %v, want [stable prerelease]", got)
+	}
+}
+
+func TestForgeDefaultsToUnconfigured(t *testing.T) {
+	t.Parallel()
+
+	forge := config.Default("/home/tester").Forge
+
+	if forge.Kind != config.ForgeNone {
+		t.Errorf("Default().Forge.Kind = %q, want %q", forge.Kind, config.ForgeNone)
+	}
+
+	if forge.Configured() {
+		t.Error("Configured() = true for a fresh configuration, want false")
+	}
+}
+
+func TestForgeSettingsAreAddressable(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{"forge.kind", "forge.github.space", "forge.gitlab.host", "forge.gitlab.space"} {
+		if !slices.Contains(config.Settings(), want) {
+			t.Errorf("Settings() = %v, want it to include %q", config.Settings(), want)
+		}
+	}
+}
+
+func TestForgeKindIsAnEnum(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Default("/home/tester").Set("forge.kind", "gitlab")
+	if err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
+	if !cfg.Forge.Configured() || cfg.Forge.Kind != config.ForgeGitLab {
+		t.Errorf("Set() left Kind = %q, want gitlab", cfg.Forge.Kind)
+	}
+
+	_, err = config.Default("/home/tester").Set("forge.kind", "bitbucket")
+	if err == nil {
+		t.Fatal("Set(forge.kind=bitbucket) error = nil, want an error")
+	}
+
+	if !strings.Contains(err.Error(), "none, github, gitlab") {
+		t.Errorf("Set() error = %q, want it to list the forges", err)
+	}
+}
+
+func TestForgeKindAndSpaceCanBeSetSeparately(t *testing.T) {
+	t.Parallel()
+
+	// Two "cwm config set" runs. The first must not be rejected for lacking
+	// what the second supplies.
+	withKind, err := config.Default("/home/tester").Set("forge.kind", "github")
+	if err != nil {
+		t.Fatalf("Set(forge.kind) error = %v", err)
+	}
+
+	if validateErr := withKind.Validate(); validateErr != nil {
+		t.Fatalf("Validate() after setting only the kind = %v, want nil", validateErr)
+	}
+
+	withSpace, err := withKind.Set("forge.github.space", "pdylanross")
+	if err != nil {
+		t.Fatalf("Set(forge.github.space) error = %v", err)
+	}
+
+	if withSpace.Forge.GitHub.Space != "pdylanross" {
+		t.Errorf("Forge.GitHub.Space = %q, want pdylanross", withSpace.Forge.GitHub.Space)
 	}
 }

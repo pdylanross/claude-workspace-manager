@@ -77,6 +77,62 @@ func (Channel) Values() []string {
 	return []string{string(ChannelStable), string(ChannelPrerelease)}
 }
 
+// Forge groups the settings naming where workspaces live.
+//
+// Every variant is present and Kind says which one is live, rather than the
+// document being externally tagged. The reason is addressing: settings are
+// enumerated by walking the struct type, so a shape that depends on the value
+// of Kind would have no static list of settings and would take "cwm config set",
+// completion and CheckShape with it. See docs/design/workspaces.md §6.
+type Forge struct {
+	// Kind says which forge, and which of the variants below is live.
+	Kind ForgeKind `json:"kind"`
+	// GitHub is read when Kind is [ForgeGitHub].
+	GitHub GitHubForge `json:"github"`
+	// GitLab is read when Kind is [ForgeGitLab].
+	GitLab GitLabForge `json:"gitlab"`
+}
+
+// GitHubForge names a space on GitHub.
+type GitHubForge struct {
+	// Space is the account or organisation holding the workspaces.
+	Space string `json:"space"`
+}
+
+// GitLabForge names a space on a GitLab instance.
+type GitLabForge struct {
+	// Host is the instance, empty for gitlab.com. Work GitLab is usually
+	// self-hosted, so this is a setting rather than a constant.
+	Host string `json:"host"`
+	// Space is the group holding the workspaces.
+	Space string `json:"space"`
+}
+
+// ForgeKind says which forge cwm is configured against.
+type ForgeKind string
+
+// The forges cwm supports, and the state of not having chosen one.
+const (
+	// ForgeNone is a cwm that has not been set up. It is a real value rather
+	// than a blank so that the setting validates like any other enum, and so
+	// that "not configured" is something the document says outright.
+	ForgeNone ForgeKind = "none"
+	// ForgeGitHub is GitHub, github.com or otherwise.
+	ForgeGitHub ForgeKind = "github"
+	// ForgeGitLab is a GitLab instance.
+	ForgeGitLab ForgeKind = "gitlab"
+)
+
+// Values lists the forges a user may set, implementing [Enum].
+func (ForgeKind) Values() []string {
+	return []string{string(ForgeNone), string(ForgeGitHub), string(ForgeGitLab)}
+}
+
+// Configured reports whether a forge has been chosen.
+func (f Forge) Configured() bool {
+	return f.Kind != ForgeNone
+}
+
 // Config is the cwm configuration document.
 //
 // Every field needs a json tag, because the tag — not the Go field name — is
@@ -93,6 +149,8 @@ type Config struct {
 	WorkspaceRoot string `cwm:"path" json:"workspaceRoot"`
 	// Update controls how cwm keeps itself up to date.
 	Update Update `json:"update"`
+	// Forge names where workspaces live. One configuration, one forge.
+	Forge Forge `json:"forge"`
 }
 
 // Default returns the configuration cwm uses when no document exists yet, with
@@ -112,6 +170,11 @@ func Default(homeDir string) Config {
 		Update: Update{
 			Mode:    ModeAuto,
 			Channel: ChannelStable,
+		},
+		Forge: Forge{
+			Kind:   ForgeNone,
+			GitHub: GitHubForge{Space: ""},
+			GitLab: GitLabForge{Host: "", Space: ""},
 		},
 	}
 }
@@ -213,6 +276,14 @@ func (c Config) withDefaults(defaults Config) Config {
 	if strings.TrimSpace(string(c.Update.Channel)) == "" {
 		c.Update.Channel = defaults.Update.Channel
 	}
+
+	if strings.TrimSpace(string(c.Forge.Kind)) == "" {
+		c.Forge.Kind = defaults.Forge.Kind
+	}
+
+	// A space is deliberately not defaulted or required. Setting the kind and
+	// the space are two separate "cwm config set" runs, and rejecting the first
+	// for lacking what the second supplies would make that impossible.
 
 	return c
 }

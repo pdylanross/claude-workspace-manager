@@ -85,7 +85,13 @@ Form methods that matter here:
 8. **bubbletea's full-screen programs take over the terminal**, which does not compose with a
    cobra command writing to an injected buffer. If one is ever needed, it owns the terminal for
    its duration and returns before anything else prints.
-9. **Charm dependencies are numerous and move fast.** `go get` of these four pulled fourteen
+9. **The `x/*` modules resolve to incompatible versions.** Adding these four pulled
+   `x/cellbuf@v0.0.13` against `x/ansi@v0.11.0`, and cellbuf failed to *compile* against that
+   ansi — `not enough arguments in call to b.Italic`. The error names a file in the module
+   cache, so it reads like a broken toolchain rather than a version skew. `go get
+   github.com/charmbracelet/x/cellbuf@latest` resolved it. Expect this on any charm upgrade and
+   upgrade the `x/*` modules together.
+10. **Charm dependencies are numerous and move fast.** `go get` of these four pulled fourteen
    transitive modules. Upgrade them together, and re-read this file when you do.
 
 ## Project conventions
