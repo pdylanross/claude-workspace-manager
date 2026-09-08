@@ -213,16 +213,48 @@ type Forge interface {
 bare `owner string`, but it no longer has to stretch around a two-level organisation/project
 hierarchy.
 
-Assumption 7 means cwm's own configuration holds exactly one of these, which suggests a `forge`
-group alongside `update`:
+Assumption 7 means cwm's own configuration holds exactly one of these, so the configuration
+grows a `forge` group alongside `update`. What that group looks like is a real decision, because
+the settings a forge needs differ: GitHub needs a namespace, GitLab needs a namespace and a
+host.
 
-```json
-"forge": { "kind": "github", "host": "", "space": "pdylanross" }
+The obvious shape is externally tagged — `{"kind": "github", "spec": {...}}` — and it is the
+right shape for the document. It is the wrong shape for the Go type, for two reasons that are
+easy to miss:
+
+- **It cannot be written under the §3.4 rules.** Externally tagged decoding in Go needs
+  `json.RawMessage` (a slice), `any`, or a pointer per variant. All three are banned, and
+  `TestConfigShapeIsAddressable` enforces the ban.
+- **It breaks path addressing.** `Settings()` enumerates every setting by walking the struct
+  *type*. If the shape of `spec` depends on the runtime value of `kind`, there is no static list
+  of settings, so `cwm config set`, shell completion and `CheckShape` all have to become
+  kind-aware.
+
+So the type carries every variant and `kind` says which one is live:
+
+```go
+type Forge struct {
+    Kind   ForgeKind  `json:"kind"`   // github | gitlab
+    GitHub GitHubSpec `json:"github"` // space
+    GitLab GitLabSpec `json:"gitlab"` // host, space
+}
 ```
 
-`kind` is an enum in the §3.4 sense — `github` or `gitlab` — and `host` is empty for the public
-instance, which is how a self-hosted GitLab gets named without a second setting to say whether
-one is in use.
+Settings stay static and fully addressable — `forge.kind`, `forge.github.space`,
+`forge.gitlab.host` — and nothing in the addressing layer changes. The cost is that the inactive
+variant is written to the document too, defaulted and meaningless. That is the same thing the
+`update` group already does with settings a user never touches, so it is a wart rather than a
+surprise.
+
+Validation is where the wart shows: only the live variant may be checked, because an unused
+GitLab host is legitimately empty when `kind` is `github`. `Validate` currently walks every
+setting unconditionally and will need to know that.
+
+**This does not foreclose the externally tagged document.** A `MarshalJSON`/`UnmarshalJSON` pair
+on `Forge` can project this type onto `{"kind": ..., "spec": {...}}` on disk whenever the noise
+becomes annoying, without touching the Go type or the addressing layer. Doing it the other way
+round — starting externally tagged and retrofitting static addressing — is the one that cannot
+be undone cheaply. Start with the boring type; buy the pretty document later if it is worth it.
 
 For the GitLab implementation, the maintained Go client is `gitlab.com/gitlab-org/api/client-go`
 (the former `xanzy/go-gitlab`). It will need a `references/` file when it is added, as
