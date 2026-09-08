@@ -17,7 +17,7 @@ per-library detail. All content optimized for LLM consumption — density over r
 | Go | 1.25 |
 | Task runner | `just` (read `justfile`; never hand-roll equivalents) |
 | Linter | `golangci-lint` v2, maratori golden config, `.golangci.yml` |
-| Release | `goreleaser` on `v*` tag |
+| Release | `goreleaser` on `v*` tag; tags cut by CI — see §7 |
 | CLI framework | cobra → `references/cobra.md` |
 
 ## 1. Validation procedure
@@ -60,6 +60,7 @@ Rules:
 | Path | Rule |
 |---|---|
 | `cmd/cwm/` | Entrypoint ONLY. Declares `version`/`commit`/`date` ldflag targets, builds `version.Info`, calls `cli.Execute`. Names must match `-X main.*` in `.goreleaser.yml`. Nothing else goes here. |
+| `cmd/release/` | Release tooling, not part of cwm. `.goreleaser.yml` builds `./cmd/cwm` alone, so nothing here ships in the installed binary. Shells out to git; the rules it applies live in `internal/release`. |
 | `internal/` | cwm-only library code. **Default home for new subsystems.** |
 | `pkg/` | Only code an outside consumer could import. Put something here only if willing to keep its API stable. |
 
@@ -329,3 +330,57 @@ The skeleton, in order:
 The PR body is written *from* the commit bodies, condensed — so write each commit message as if it
 were going to be read by a reviewer, because it is. Same rules: subject in conventional-commit
 form, body in prose explaining why, `--` for em dashes, and the harness attribution trailers last.
+
+## 7. Release pipeline
+
+Versions are derived from commit messages, not chosen by hand. `internal/release` holds the rules
+(pure, tested against the worked example in `plan_test.go`); `cmd/release` reads git and prints
+`key=value` lines a workflow appends to `$GITHUB_OUTPUT`.
+
+### What a commit is worth
+
+Conventional commits, largest wins across everything since the last **real** release:
+
+| Commit | Bump |
+|---|---|
+| `feat:` | minor |
+| `fix:`, `perf:` | patch |
+| any type with `!` before the colon, or a `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer | major |
+| everything else (`docs:`, `chore:`, `test:`, `refactor:`, `ci:`, unlabelled) | none |
+
+**No bump means no release.** A docs-only push moves main and cuts nothing. This is why commit
+subjects matter: an unlabelled commit is invisible to the pipeline.
+
+### The cycle
+
+Every push to main, after lint/test/build pass, cuts a prerelease `vX.Y.Z-preN`. A gated `promote`
+job turns the newest one into `vX.Y.Z`.
+
+**The prerelease counter is scoped to the target version, not to the timeline.** When a `feat:`
+arrives after `1.0.2-pre1` has been cut, the target moves to `1.1.0`, whose counter has never been
+used, so the next cut is `1.1.0-pre1` and `1.0.2-pre1` is simply left behind. Abandoned tags are
+normal and are never cleaned up.
+
+```
+1.0.0 ─ fix ─> 1.0.1-pre1 ─ fix ─> 1.0.1-pre2 ─ approve ─> 1.0.1
+      ─ fix ─> 1.0.2-pre1 ─ feat ─> 1.1.0-pre1 ─ fix ─> 1.1.0-pre2 ─ feat ─> 1.1.0-pre3 ─ approve ─> 1.1.0
+                    ^ abandoned
+```
+
+### Rules
+
+- **The `release` environment must have required reviewers.** The `promote` job is gated on it and
+  nothing else. An environment with no protection promotes every prerelease automatically, which
+  defeats the whole point.
+- **Promotion tags the prerelease's commit, not HEAD.** main moves while approval waits; releasing
+  HEAD would ship code that was never in the prerelease. The workflow checks the tag out detached
+  before goreleaser runs.
+- **CI runs goreleaser itself** rather than relying on `release.yml`. A tag pushed with
+  `GITHUB_TOKEN` does not trigger another workflow — GitHub's loop protection — so a tag-triggered
+  release would silently never fire. `release.yml` remains for tags pushed by hand.
+- **Prerelease tags are `-preN`, not `-pre.N`.** N is compared as a number everywhere cwm compares
+  it, but *semver* compares `pre1` and `pre10` as text, so `pre10` sorts before `pre2`. Nothing in
+  the pipeline depends on semver ordering; `internal/update` does. Changing the label to `pre.N`
+  fixes it and only `PrereleaseLabel` and one regexp would move.
+- Bumping is literal: a breaking change below 1.0.0 still cuts a major. There is no "0.x is
+  special" rule.
