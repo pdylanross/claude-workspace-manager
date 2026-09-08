@@ -5,9 +5,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/charmbracelet/fang"
+
+	"github.com/pdylanross/claude-workspace-manager/internal/forge"
 	"github.com/pdylanross/claude-workspace-manager/internal/paths"
+	"github.com/pdylanross/claude-workspace-manager/pkg/config"
 	"github.com/pdylanross/claude-workspace-manager/pkg/version"
 )
 
@@ -19,8 +24,19 @@ func Execute(info version.Info) error {
 	resolver := paths.New(paths.NewOSEnvironment())
 
 	newUpdater := func() (Updater, error) { return newOSUpdater(resolver, info) }
+	newTool := func(kind config.ForgeKind) (*forge.Tool, error) {
+		return forge.New(kind, forge.Options{Run: nil, LookPath: nil})
+	}
 
-	if err := newRootCmd(info, resolver, newUpdater).Execute(); err != nil {
+	// fang styles help, usage, errors and --version, and owns the version flag,
+	// which is why newRootCmd leaves cobra's Version field alone.
+	err := fang.Execute(
+		context.Background(),
+		newRootCmd(info, resolver, newUpdater, newTool),
+		fang.WithVersion(info.Short()),
+		fang.WithCommit(info.Commit),
+	)
+	if err != nil {
 		return fmt.Errorf("execute cwm: %w", err)
 	}
 

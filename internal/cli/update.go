@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pdylanross/claude-workspace-manager/internal/cache"
+	"github.com/pdylanross/claude-workspace-manager/internal/forge"
 	"github.com/pdylanross/claude-workspace-manager/internal/paths"
 	"github.com/pdylanross/claude-workspace-manager/internal/update"
 	"github.com/pdylanross/claude-workspace-manager/pkg/config"
@@ -46,6 +47,10 @@ type Updater interface {
 	// Apply installs a release and returns where it went.
 	Apply(ctx context.Context, release update.Release) (string, error)
 }
+
+// toolFactory builds the forge client probe a command works through. It is a
+// function for the same reason updaterFactory is: so a test can substitute one.
+type toolFactory func(kind config.ForgeKind) (*forge.Tool, error)
 
 // updaterFactory builds the Updater a command works through.
 //
