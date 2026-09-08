@@ -33,6 +33,19 @@ the section that depends on it is the section to revisit.
    can add it against a real seam.
 6. **The GitLab instance may be self-hosted.** Work GitLab usually is. Host is configuration,
    not a constant, and `gitlab.com` is a default rather than an assumption.
+7. **One cwm configuration means one forge, one space, one workspace root.** Not one per
+   machine — one per configuration. Personal GitHub and work GitLab are not meant to be used
+   side by side, because they are not on the same machine; the personal one lives on a personal
+   computer and the work one on a work laptop.
+
+   Somebody who does want both on one machine runs two configurations, which is what
+   `CWM_CONFIG_ROOT` and `CWM_CACHE_ROOT` already exist for, each pointing at its own workspace
+   root. **Two configurations sharing a workspace root is unsupported and its behaviour is
+   undefined.** cwm neither prevents nor detects it.
+
+   This is the assumption that pays for the most simplification downstream. Discovery has one
+   space to search, configuration has one forge to describe, and the clone layout in §7 becomes
+   provably safe rather than merely usually safe.
 
 ## 2. What makes a repository a workspace
 
@@ -196,9 +209,20 @@ type Forge interface {
 }
 ```
 
-`Space` is a forge plus a namespace path: a GitHub account or org, a GitLab group which may be
-nested several levels deep. Still not a bare `owner string`, but it no longer has to stretch
-around a two-level organisation/project hierarchy.
+`Space` is a forge plus a namespace path: a GitHub account or org, a GitLab group. Still not a
+bare `owner string`, but it no longer has to stretch around a two-level organisation/project
+hierarchy.
+
+Assumption 7 means cwm's own configuration holds exactly one of these, which suggests a `forge`
+group alongside `update`:
+
+```json
+"forge": { "kind": "github", "host": "", "space": "pdylanross" }
+```
+
+`kind` is an enum in the §3.4 sense — `github` or `gitlab` — and `host` is empty for the public
+instance, which is how a self-hosted GitLab gets named without a second setting to say whether
+one is in use.
 
 For the GitLab implementation, the maintained Go client is `gitlab.com/gitlab-org/api/client-go`
 (the former `xanzy/go-gitlab`). It will need a `references/` file when it is added, as
@@ -209,18 +233,29 @@ go-github did.
 Flat under `workspaceRoot`: one directory per workspace, named for the repository. Nothing
 nested, nothing computed from the forge or the namespace.
 
-The cost is that two spaces cannot both hold a repository of the same name, and both will be in
-use — personal GitHub and work GitLab. `notes` in each is not a contrived example. The answer is
-not to pre-emptively nest every path against a collision that may never happen: cwm should detect
-the collision when it happens and refuse to clone over the top, and if it turns out to be common
-then `.cwm.json` gains a setting for the local directory name. That is a setting the schema is
-designed to be able to grow.
+Assumption 7 is what makes this safe rather than merely tidy. One configuration searches one
+space, and within a single namespace a repository name is unique by construction — a forge
+cannot hold two repositories at `owner/notes`. So a name collision is not something flat layout
+risks; it is something that cannot arise in a supported configuration.
+
+There are two ways to leave that guarantee, and both are worth naming because neither is
+obvious:
+
+- **Sharing one workspace root between two configurations**, which assumption 7 says is
+  unsupported. Personal `notes` and work `notes` would collide in exactly the way this design
+  otherwise rules out.
+- **Recursing into GitLab subgroups.** `group/a/notes` and `group/b/notes` are distinct
+  projects with the same name, so a space that spans subgroups can collide with itself. The
+  API's `include_subgroups` parameter defaults to `false`, and cwm should leave it there. If
+  recursive spaces are ever wanted, this is the thing that has to be solved first, not an
+  afterthought.
+
+cwm should still refuse to clone over a directory that is already occupied. That is not a
+design for collisions — it is the guard that turns an unsupported configuration into an error
+message instead of a silently clobbered workspace.
 
 ## 8. Open questions
 
-- **How a space is configured.** One forge and one space, or several at once? Personal GitHub
-  and work GitLab are both in use, which points at several, and several is what makes the
-  collision above reachable.
 - **Whether the addressing layer gets generalised.** `.cwm.json` wants what `pkg/config` already
   has — `Settings`, `Get`, `Set`, `Render`, `CheckShape`, `Enum`, the `cwm:"path"` tag — and all
   of it is currently written against the `Config` type specifically. Two documents with the same
