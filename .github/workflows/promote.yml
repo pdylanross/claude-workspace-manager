@@ -1,0 +1,77 @@
+name: Promote
+
+# The manual gate. Environment required-reviewers would be the tidier mechanism,
+# but GitHub only offers it on private repositories under a paid plan, so the
+# approval is the deliberate act of running this workflow and typing the tag.
+#
+# Once this repository is public, adding "environment: release" to the job below
+# layers a reviewer approval on top of the dispatch.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to cut, e.g. v1.1.0. Must match the pending promotion."
+        required: true
+        type: string
+
+# Shared with CI so that a promotion and a prerelease cannot tag at once.
+concurrency:
+  group: release-refs/heads/main
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Work out what to promote
+        id: promote
+        # Reports the source prerelease as well as the target, because main may
+        # have moved on since it was cut.
+        run: go run ./cmd/release promote >> "$GITHUB_OUTPUT"
+
+      - name: Check it is what was asked for
+        env:
+          WANTED: ${{ inputs.tag }}
+          FOUND: ${{ steps.promote.outputs.tag }}
+        run: |
+          if [ -z "$FOUND" ]; then
+            echo "::error::No prerelease is waiting to be promoted."
+            exit 1
+          fi
+          if [ "$WANTED" != "$FOUND" ]; then
+            echo "::error::Asked to cut $WANTED but the pending promotion is $FOUND."
+            exit 1
+          fi
+          echo "Promoting to $FOUND."
+
+      - name: Tag the release at the commit that was tested
+        env:
+          TAG: ${{ steps.promote.outputs.tag }}
+          SOURCE: ${{ steps.promote.outputs.source }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG" "$SOURCE^{commit}"
+          git push origin "$TAG"
+          # goreleaser builds the working tree, so move it to the tag rather
+          # than releasing whatever main has become since.
+          git checkout --detach "$TAG"
+
+      - name: Release it
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

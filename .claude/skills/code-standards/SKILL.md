@@ -353,8 +353,8 @@ subjects matter: an unlabelled commit is invisible to the pipeline.
 
 ### The cycle
 
-Every push to main, after lint/test/build pass, cuts a prerelease `vX.Y.Z-preN`. A gated `promote`
-job turns the newest one into `vX.Y.Z`.
+Every push to main, after lint/test/build pass, cuts a prerelease `vX.Y.Z-preN` (`ci.yml`). The
+`Promote` workflow, run by hand, turns the newest one into `vX.Y.Z`.
 
 **The prerelease counter is scoped to the target version, not to the timeline.** When a `feat:`
 arrives after `1.0.2-pre1` has been cut, the target moves to `1.1.0`, whose counter has never been
@@ -369,9 +369,12 @@ normal and are never cleaned up.
 
 ### Rules
 
-- **The `release` environment must have required reviewers.** The `promote` job is gated on it and
-  nothing else. An environment with no protection promotes every prerelease automatically, which
-  defeats the whole point.
+- **Promotion is a manual workflow run, not an environment approval.** GitHub offers required
+  reviewers on a private repository only under a paid plan — the API answers 422 on Free — so the
+  gate is running `Promote` from the Actions tab and typing the tag, which the workflow checks
+  against the pending promotion before it tags anything. Once this repository is public, adding
+  `environment: release` to that job layers a reviewer approval on top; the environment already
+  exists, with no protection rules, and is referenced by nothing.
 - **Promotion tags the prerelease's commit, not HEAD.** main moves while approval waits; releasing
   HEAD would ship code that was never in the prerelease. The workflow checks the tag out detached
   before goreleaser runs.

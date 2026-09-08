@@ -54,9 +54,9 @@ jobs:
       - name: Build
         run: go build -v ./...
 
-  # Everything below runs only for a push to main, and only once the three jobs
-  # above have passed. A prerelease is cut from the commits since the last real
-  # release; the promotion that turns it into one waits for a human.
+  # Runs only for a push to main, and only once the three jobs above have
+  # passed. Promotion to a real release is the separate Promote workflow, run by
+  # hand.
   prerelease:
     name: Prerelease
     needs: [lint, test, build]
@@ -96,55 +96,6 @@ jobs:
 
       - name: Release it
         if: steps.plan.outputs.tag != ''
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Gated on the "release" environment: give that environment required
-  # reviewers in repository settings and this job waits for one of them.
-  # WITHOUT THAT PROTECTION IT PROMOTES EVERY PRERELEASE AUTOMATICALLY.
-  promote:
-    name: Promote
-    needs: [prerelease]
-    if: needs.prerelease.outputs.tag != ''
-    runs-on: ubuntu-latest
-    environment: release
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
-
-      - name: Work out what to promote
-        id: promote
-        # Reports the source prerelease as well as the target, because main may
-        # have moved on while this waited for approval.
-        run: go run ./cmd/release promote >> "$GITHUB_OUTPUT"
-
-      - name: Tag the release at the commit that was tested
-        if: steps.promote.outputs.tag != ''
-        env:
-          TAG: ${{ steps.promote.outputs.tag }}
-          SOURCE: ${{ steps.promote.outputs.source }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "$TAG" "$SOURCE^{commit}"
-          git push origin "$TAG"
-          # goreleaser builds the working tree, so move it to the tag rather
-          # than releasing whatever main has become since.
-          git checkout --detach "$TAG"
-
-      - name: Release it
-        if: steps.promote.outputs.tag != ''
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
